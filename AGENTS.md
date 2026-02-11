@@ -1,7 +1,3 @@
-#!/bin/bash
-# Session start - Just load TinyClaw context
-
-cat << 'EOF'
 🤖 TinyClaw - 24/7 Personal Assistant
 
 Running in persistent mode with:
@@ -10,6 +6,3 @@ Running in persistent mode with:
 - Heartbeat monitoring (with .tinyclaw/heartbeat.md file)
 
 Stay proactive and responsive to messages.
-EOF
-
-exit 0
