@@ -99,6 +99,28 @@ function log(level: string, message: string): void {
     fs.appendFileSync(LOG_FILE, logMessage);
 }
 
+// Load teams from settings for /team command
+function getTeamListText(): string {
+    try {
+        const settingsData = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        const settings = JSON.parse(settingsData);
+        const teams = settings.teams;
+        if (!teams || Object.keys(teams).length === 0) {
+            return 'No teams configured.\n\nCreate a team with: tinyclaw team add';
+        }
+        let text = 'Available Teams:\n';
+        for (const [id, team] of Object.entries(teams) as [string, any][]) {
+            text += `\n@${id} - ${team.name}`;
+            text += `\n  Agents: ${team.agents.join(', ')}`;
+            text += `\n  Leader: @${team.leader_agent}`;
+        }
+        text += '\n\nUsage: Start your message with @team_id to route to a team.';
+        return text;
+    } catch {
+        return 'Could not load team configuration.';
+    }
+}
+
 // Load agents from settings for /agent command
 function getAgentListText(): string {
     try {
@@ -313,6 +335,16 @@ bot.on('message', async (msg: TelegramBot.Message) => {
             log('INFO', 'Agent list command received');
             const agentList = getAgentListText();
             await bot.sendMessage(msg.chat.id, agentList, {
+                reply_to_message_id: msg.message_id,
+            });
+            return;
+        }
+
+        // Check for team list command
+        if (msg.text && msg.text.trim().match(/^[!/]team$/i)) {
+            log('INFO', 'Team list command received');
+            const teamList = getTeamListText();
+            await bot.sendMessage(msg.chat.id, teamList, {
                 reply_to_message_id: msg.message_id,
             });
             return;

@@ -43,6 +43,17 @@ interface AgentConfig {
     working_directory: string;
 }
 
+interface TeamConfig {
+    name: string;
+    agents: string[];
+    leader_agent: string;
+}
+
+interface ChainStep {
+    agentId: string;
+    response: string;
+}
+
 interface Settings {
     workspace?: {
         path?: string;
@@ -64,6 +75,7 @@ interface Settings {
         };
     };
     agents?: Record<string, AgentConfig>;
+    teams?: Record<string, TeamConfig>;
     monitoring?: {
         heartbeat_interval?: number;
     };
@@ -184,6 +196,65 @@ function getAgents(settings: Settings): Record<string, AgentConfig> {
 }
 
 /**
+ * Get all configured teams.
+ */
+function getTeams(settings: Settings): Record<string, TeamConfig> {
+    return settings.teams || {};
+}
+
+/**
+ * Find the first team that contains the given agent.
+ */
+function findTeamForAgent(agentId: string, teams: Record<string, TeamConfig>): { teamId: string; team: TeamConfig } | null {
+    for (const [teamId, team] of Object.entries(teams)) {
+        if (team.agents.includes(agentId)) {
+            return { teamId, team };
+        }
+    }
+    return null;
+}
+
+/**
+ * Check if a mentioned ID is a valid teammate of the current agent in the given team.
+ */
+function isTeammate(
+    mentionedId: string,
+    currentAgentId: string,
+    teamId: string,
+    teams: Record<string, TeamConfig>,
+    agents: Record<string, AgentConfig>
+): boolean {
+    const team = teams[teamId];
+    if (!team) return false;
+    return (
+        mentionedId !== currentAgentId &&
+        team.agents.includes(mentionedId) &&
+        !!agents[mentionedId]
+    );
+}
+
+/**
+ * Extract the first valid @teammate mention from a response text.
+ * Returns the teammate agent ID and the rest of the message, or null if no teammate mentioned.
+ */
+function extractTeammateMention(
+    response: string,
+    currentAgentId: string,
+    teamId: string,
+    teams: Record<string, TeamConfig>,
+    agents: Record<string, AgentConfig>
+): { teammateId: string } | null {
+    const mentions = response.match(/@(\S+)/g) || [];
+    for (const mention of mentions) {
+        const candidateId = mention.slice(1).toLowerCase();
+        if (isTeammate(candidateId, currentAgentId, teamId, teams, agents)) {
+            return { teammateId: candidateId };
+        }
+    }
+    return null;
+}
+
+/**
  * Resolve the model ID for Claude (Anthropic).
  */
 function resolveClaudeModel(model: string): string {
@@ -206,9 +277,10 @@ function getAgentResetFlag(agentId: string, workspacePath: string): string {
 
 
 /**
- * Detect if message mentions multiple agents (easter egg for future feature)
+ * Detect if message mentions multiple agents (easter egg for future feature).
+ * If all mentioned agents are in the same team, returns empty (team chain handles it).
  */
-function detectMultipleAgents(message: string, agents: Record<string, AgentConfig>): string[] {
+function detectMultipleAgents(message: string, agents: Record<string, AgentConfig>, teams: Record<string, TeamConfig>): string[] {
     const mentions = message.match(/@(\S+)/g) || [];
     const validAgents: string[] = [];
 
@@ -219,17 +291,30 @@ function detectMultipleAgents(message: string, agents: Record<string, AgentConfi
         }
     }
 
+    // If multiple agents are all in the same team, don't trigger easter egg
+    if (validAgents.length > 1) {
+        for (const [, team] of Object.entries(teams)) {
+            if (validAgents.every(a => team.agents.includes(a))) {
+                return []; // Same team — chain will handle collaboration
+            }
+        }
+    }
+
     return validAgents;
 }
 
 /**
- * Parse @agent_id prefix from a message.
- * Returns { agentId, message } where message has the prefix stripped.
- * Returns { agentId: 'error', message: '...' } if multiple agents detected.
+ * Parse @agent_id or @team_id prefix from a message.
+ * Returns { agentId, message, isTeam } where message has the prefix stripped.
+ * Returns { agentId: 'error', message: '...' } if multiple agents detected (across teams).
  */
-function parseAgentRouting(rawMessage: string, agents: Record<string, AgentConfig>): { agentId: string; message: string } {
-    // Easter egg: Check for multiple agent mentions
-    const mentionedAgents = detectMultipleAgents(rawMessage, agents);
+function parseAgentRouting(
+    rawMessage: string,
+    agents: Record<string, AgentConfig>,
+    teams: Record<string, TeamConfig> = {}
+): { agentId: string; message: string; isTeam?: boolean } {
+    // Easter egg: Check for multiple agent mentions (only for agents NOT in the same team)
+    const mentionedAgents = detectMultipleAgents(rawMessage, agents, teams);
     if (mentionedAgents.length > 1) {
         const agentList = mentionedAgents.map(t => `@${t}`).join(', ');
         return {
@@ -249,13 +334,28 @@ function parseAgentRouting(rawMessage: string, agents: Record<string, AgentConfi
     const match = rawMessage.match(/^@(\S+)\s+([\s\S]*)$/);
     if (match) {
         const candidateId = match[1].toLowerCase();
+
+        // Check agent IDs
         if (agents[candidateId]) {
             return { agentId: candidateId, message: match[2] };
         }
-        // Also match by agent name (case-insensitive)
+
+        // Check team IDs — resolve to leader agent
+        if (teams[candidateId]) {
+            return { agentId: teams[candidateId].leader_agent, message: match[2], isTeam: true };
+        }
+
+        // Match by agent name (case-insensitive)
         for (const [id, config] of Object.entries(agents)) {
             if (config.name.toLowerCase() === candidateId) {
                 return { agentId: id, message: match[2] };
+            }
+        }
+
+        // Match by team name (case-insensitive)
+        for (const [id, config] of Object.entries(teams)) {
+            if (config.name.toLowerCase() === candidateId) {
+                return { agentId: config.leader_agent, message: match[2], isTeam: true };
             }
         }
     }
@@ -336,6 +436,94 @@ function log(level: string, message: string): void {
     fs.appendFileSync(LOG_FILE, logMessage);
 }
 
+/**
+ * Invoke a single agent with a message. Contains all Claude/Codex invocation logic.
+ * Returns the raw response text.
+ */
+async function invokeAgent(
+    agent: AgentConfig,
+    agentId: string,
+    message: string,
+    workspacePath: string,
+    shouldReset: boolean
+): Promise<string> {
+    // Ensure agent directory exists with config files
+    const agentDir = path.join(workspacePath, agentId);
+    const isNewAgent = !fs.existsSync(agentDir);
+    ensureAgentDirectory(agentDir);
+    if (isNewAgent) {
+        log('INFO', `Initialized agent directory with config files: ${agentDir}`);
+    }
+
+    // Resolve working directory
+    const workingDir = agent.working_directory
+        ? (path.isAbsolute(agent.working_directory)
+            ? agent.working_directory
+            : path.join(workspacePath, agent.working_directory))
+        : agentDir;
+
+    const provider = agent.provider || 'anthropic';
+
+    if (provider === 'openai') {
+        log('INFO', `Using Codex CLI (agent: ${agentId})`);
+
+        const shouldResume = !shouldReset;
+
+        if (shouldReset) {
+            log('INFO', `🔄 Resetting Codex conversation for agent: ${agentId}`);
+        }
+
+        const modelId = resolveCodexModel(agent.model);
+        const codexArgs = ['exec'];
+        if (shouldResume) {
+            codexArgs.push('resume', '--last');
+        }
+        if (modelId) {
+            codexArgs.push('--model', modelId);
+        }
+        codexArgs.push('--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '--json', message);
+
+        const codexOutput = await runCommand('codex', codexArgs, workingDir);
+
+        // Parse JSONL output and extract final agent_message
+        let response = '';
+        const lines = codexOutput.trim().split('\n');
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === 'item.completed' && json.item?.type === 'agent_message') {
+                    response = json.item.text;
+                }
+            } catch (e) {
+                // Ignore lines that aren't valid JSON
+            }
+        }
+
+        return response || 'Sorry, I could not generate a response from Codex.';
+    } else {
+        // Default to Claude (Anthropic)
+        log('INFO', `Using Claude provider (agent: ${agentId})`);
+
+        const continueConversation = !shouldReset;
+
+        if (shouldReset) {
+            log('INFO', `🔄 Resetting conversation for agent: ${agentId}`);
+        }
+
+        const modelId = resolveClaudeModel(agent.model);
+        const claudeArgs = ['--dangerously-skip-permissions'];
+        if (modelId) {
+            claudeArgs.push('--model', modelId);
+        }
+        if (continueConversation) {
+            claudeArgs.push('-c');
+        }
+        claudeArgs.push('-p', message);
+
+        return await runCommand('claude', claudeArgs, workingDir);
+    }
+}
+
 // Process a single message
 async function processMessage(messageFile: string): Promise<void> {
     const processingFile = path.join(QUEUE_PROCESSING, path.basename(messageFile));
@@ -350,26 +538,29 @@ async function processMessage(messageFile: string): Promise<void> {
 
         log('INFO', `Processing [${channel}] from ${sender}: ${rawMessage.substring(0, 50)}...`);
 
-        // Get settings and agents
+        // Get settings, agents, and teams
         const settings = getSettings();
         const agents = getAgents(settings);
+        const teams = getTeams(settings);
 
         // Get workspace path from settings
         const workspacePath = settings?.workspace?.path || path.join(require('os').homedir(), 'tinyclaw-workspace');
 
-        // Route message to agent
+        // Route message to agent (or team)
         let agentId: string;
         let message: string;
+        let isTeamRouted = false;
 
         if (messageData.agent && agents[messageData.agent]) {
             // Pre-routed by channel client
             agentId = messageData.agent;
             message = rawMessage;
         } else {
-            // Parse @agent prefix
-            const routing = parseAgentRouting(rawMessage, agents);
+            // Parse @agent or @team prefix
+            const routing = parseAgentRouting(rawMessage, agents, teams);
             agentId = routing.agentId;
             message = routing.message;
+            isTeamRouted = !!routing.isTeam;
         }
 
         // Easter egg: Handle multiple agent mentions
@@ -407,20 +598,22 @@ async function processMessage(messageFile: string): Promise<void> {
         const agent = agents[agentId];
         log('INFO', `Routing to agent: ${agent.name} (${agentId}) [${agent.provider}/${agent.model}]`);
 
-        // Ensure agent directory exists with config files
-        const agentDir = path.join(workspacePath, agentId);
-        const isNewAgent = !fs.existsSync(agentDir);
-        ensureAgentDirectory(agentDir);
-        if (isNewAgent) {
-            log('INFO', `Initialized agent directory with config files: ${agentDir}`);
+        // Determine team context
+        // If routed via @team_id, use that team. Otherwise check if agent belongs to a team.
+        let teamContext: { teamId: string; team: TeamConfig } | null = null;
+        if (isTeamRouted) {
+            // Find which team was targeted — the agent was resolved from a team's leader
+            for (const [tid, t] of Object.entries(teams)) {
+                if (t.leader_agent === agentId && t.agents.includes(agentId)) {
+                    teamContext = { teamId: tid, team: t };
+                    break;
+                }
+            }
         }
-
-        // Resolve working directory - use agent directory
-        const workingDir = agent.working_directory
-            ? (path.isAbsolute(agent.working_directory)
-                ? agent.working_directory
-                : path.join(workspacePath, agent.working_directory))
-            : agentDir;
+        if (!teamContext) {
+            // Check if the directly-addressed agent belongs to a team
+            teamContext = findTeamForAgent(agentId, teams);
+        }
 
         // Check for reset (per-agent or global)
         const agentResetFlag = getAgentResetFlag(agentId, workspacePath);
@@ -432,82 +625,100 @@ async function processMessage(messageFile: string): Promise<void> {
             if (fs.existsSync(agentResetFlag)) fs.unlinkSync(agentResetFlag);
         }
 
-        const provider = agent.provider || 'anthropic';
+        let finalResponse: string;
+        const allFiles = new Set<string>();
 
-        // Call AI provider
-        let response: string;
-        try {
-            if (provider === 'openai') {
-                log('INFO', `Using Codex CLI (agent: ${agentId})`);
+        if (!teamContext) {
+            // No team context — single agent invocation (backward compatible)
+            try {
+                finalResponse = await invokeAgent(agent, agentId, message, workspacePath, shouldReset);
+            } catch (error) {
+                const provider = agent.provider || 'anthropic';
+                log('ERROR', `${provider === 'openai' ? 'Codex' : 'Claude'} error (agent: ${agentId}): ${(error as Error).message}`);
+                finalResponse = "Sorry, I encountered an error processing your request. Please check the queue logs.";
+            }
+        } else {
+            // Team context — chain execution
+            log('INFO', `Team context: ${teamContext.team.name} (@${teamContext.teamId})`);
 
-                const shouldResume = !shouldReset;
+            const chainSteps: ChainStep[] = [];
+            let currentAgentId = agentId;
+            let currentMessage = message;
 
-                if (shouldReset) {
-                    log('INFO', `🔄 Resetting Codex conversation for agent: ${agentId}`);
+            // Chain loop — continues until agent responds without mentioning a teammate
+            while (true) {
+                const currentAgent = agents[currentAgentId];
+                if (!currentAgent) {
+                    log('ERROR', `Agent ${currentAgentId} not found during chain execution`);
+                    break;
                 }
 
-                const modelId = resolveCodexModel(agent.model);
-                const codexArgs = ['exec'];
-                if (shouldResume) {
-                    codexArgs.push('resume', '--last');
-                }
-                if (modelId) {
-                    codexArgs.push('--model', modelId);
-                }
-                codexArgs.push('--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', '--json', message);
+                log('INFO', `Chain step ${chainSteps.length + 1}: invoking @${currentAgentId}`);
 
-                const codexOutput = await runCommand('codex', codexArgs, workingDir);
+                // Determine if this specific agent needs reset
+                const currentResetFlag = getAgentResetFlag(currentAgentId, workspacePath);
+                const currentShouldReset = chainSteps.length === 0
+                    ? shouldReset
+                    : fs.existsSync(currentResetFlag);
 
-                // Parse JSONL output and extract final agent_message
-                response = '';
-                const lines = codexOutput.trim().split('\n');
-                for (const line of lines) {
-                    try {
-                        const json = JSON.parse(line);
-                        if (json.type === 'item.completed' && json.item?.type === 'agent_message') {
-                            response = json.item.text;
-                        }
-                    } catch (e) {
-                        // Ignore lines that aren't valid JSON
+                if (currentShouldReset && fs.existsSync(currentResetFlag)) {
+                    fs.unlinkSync(currentResetFlag);
+                }
+
+                let stepResponse: string;
+                try {
+                    stepResponse = await invokeAgent(currentAgent, currentAgentId, currentMessage, workspacePath, currentShouldReset);
+                } catch (error) {
+                    const provider = currentAgent.provider || 'anthropic';
+                    log('ERROR', `${provider === 'openai' ? 'Codex' : 'Claude'} error (agent: ${currentAgentId}): ${(error as Error).message}`);
+                    stepResponse = "Sorry, I encountered an error processing this request.";
+                }
+
+                chainSteps.push({ agentId: currentAgentId, response: stepResponse });
+
+                // Collect files from this step
+                const stepFileRegex = /\[send_file:\s*([^\]]+)\]/g;
+                let stepFileMatch: RegExpExecArray | null;
+                while ((stepFileMatch = stepFileRegex.exec(stepResponse)) !== null) {
+                    const filePath = stepFileMatch[1].trim();
+                    if (fs.existsSync(filePath)) {
+                        allFiles.add(filePath);
                     }
                 }
 
-                if (!response) {
-                    response = 'Sorry, I could not generate a response from Codex.';
-                }
-            } else {
-                // Default to Claude (Anthropic)
-                log('INFO', `Using Claude provider (agent: ${agentId})`);
+                // Check if response mentions a teammate
+                const teammateMention = extractTeammateMention(
+                    stepResponse, currentAgentId, teamContext.teamId, teams, agents
+                );
 
-                const continueConversation = !shouldReset;
-
-                if (shouldReset) {
-                    log('INFO', `🔄 Resetting conversation for agent: ${agentId}`);
+                if (!teammateMention) {
+                    // No teammate mentioned — chain ends naturally
+                    log('INFO', `Chain ended after ${chainSteps.length} step(s) — no teammate mentioned`);
+                    break;
                 }
 
-                const modelId = resolveClaudeModel(agent.model);
-                const claudeArgs = ['--dangerously-skip-permissions'];
-                if (modelId) {
-                    claudeArgs.push('--model', modelId);
-                }
-                if (continueConversation) {
-                    claudeArgs.push('-c');
-                }
-                claudeArgs.push('-p', message);
-
-                response = await runCommand('claude', claudeArgs, workingDir);
+                // Hand off to teammate
+                log('INFO', `@${currentAgentId} mentioned @${teammateMention.teammateId} — continuing chain`);
+                currentAgentId = teammateMention.teammateId;
+                currentMessage = `[Message from teammate @${chainSteps[chainSteps.length - 1].agentId}]:\n${stepResponse}`;
             }
-        } catch (error) {
-            log('ERROR', `${provider === 'openai' ? 'Codex' : 'Claude'} error (agent: ${agentId}): ${(error as Error).message}`);
-            response = "Sorry, I encountered an error processing your request. Please check the queue logs.";
+
+            // Aggregate responses
+            if (chainSteps.length === 1) {
+                finalResponse = chainSteps[0].response;
+            } else {
+                finalResponse = chainSteps
+                    .map(step => `@${step.agentId}: ${step.response}`)
+                    .join('\n\n---\n\n');
+            }
         }
 
         // Detect file references in the response: [send_file: /path/to/file]
-        response = response.trim();
-        const outboundFilesSet = new Set<string>();
+        finalResponse = finalResponse.trim();
+        const outboundFilesSet = new Set<string>(allFiles);
         const fileRefRegex = /\[send_file:\s*([^\]]+)\]/g;
         let fileMatch: RegExpExecArray | null;
-        while ((fileMatch = fileRefRegex.exec(response)) !== null) {
+        while ((fileMatch = fileRefRegex.exec(finalResponse)) !== null) {
             const filePath = fileMatch[1].trim();
             if (fs.existsSync(filePath)) {
                 outboundFilesSet.add(filePath);
@@ -517,19 +728,19 @@ async function processMessage(messageFile: string): Promise<void> {
 
         // Remove the [send_file: ...] tags from the response text
         if (outboundFiles.length > 0) {
-            response = response.replace(fileRefRegex, '').trim();
+            finalResponse = finalResponse.replace(fileRefRegex, '').trim();
         }
 
         // Limit response length after tags are parsed and removed
-        if (response.length > 4000) {
-            response = response.substring(0, 3900) + '\n\n[Response truncated...]';
+        if (finalResponse.length > 4000) {
+            finalResponse = finalResponse.substring(0, 3900) + '\n\n[Response truncated...]';
         }
 
         // Write response to outgoing queue
         const responseData: ResponseData = {
             channel,
             sender,
-            message: response,
+            message: finalResponse,
             originalMessage: rawMessage,
             timestamp: Date.now(),
             messageId,
@@ -544,7 +755,7 @@ async function processMessage(messageFile: string): Promise<void> {
 
         fs.writeFileSync(responseFile, JSON.stringify(responseData, null, 2));
 
-        log('INFO', `✓ Response ready [${channel}] ${sender} via agent:${agentId} (${response.length} chars)`);
+        log('INFO', `✓ Response ready [${channel}] ${sender} via agent:${agentId} (${finalResponse.length} chars)`);
 
         // Clean up processing file
         fs.unlinkSync(processingFile);
@@ -573,21 +784,23 @@ interface QueueFile {
 const agentProcessingChains = new Map<string, Promise<void>>();
 
 /**
- * Peek at a message file to determine which agent it's routed to
+ * Peek at a message file to determine which agent it's routed to.
+ * Also resolves team IDs to their leader agent.
  */
 function peekAgentId(filePath: string): string {
     try {
         const messageData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         const settings = getSettings();
         const agents = getAgents(settings);
+        const teams = getTeams(settings);
 
         // Check for pre-routed agent
         if (messageData.agent && agents[messageData.agent]) {
             return messageData.agent;
         }
 
-        // Parse @agent_id prefix
-        const routing = parseAgentRouting(messageData.message || '', agents);
+        // Parse @agent_id or @team_id prefix
+        const routing = parseAgentRouting(messageData.message || '', agents, teams);
         return routing.agentId || 'default';
     } catch {
         return 'default';
@@ -641,14 +854,24 @@ async function processQueue(): Promise<void> {
     }
 }
 
-// Log agent configuration on startup
+// Log agent and team configuration on startup
 function logAgentConfig(): void {
     const settings = getSettings();
     const agents = getAgents(settings);
+    const teams = getTeams(settings);
+
     const agentCount = Object.keys(agents).length;
     log('INFO', `Loaded ${agentCount} agent(s):`);
     for (const [id, agent] of Object.entries(agents)) {
         log('INFO', `  ${id}: ${agent.name} [${agent.provider}/${agent.model}] cwd=${agent.working_directory}`);
+    }
+
+    const teamCount = Object.keys(teams).length;
+    if (teamCount > 0) {
+        log('INFO', `Loaded ${teamCount} team(s):`);
+        for (const [id, team] of Object.entries(teams)) {
+            log('INFO', `  ${id}: ${team.name} [agents: ${team.agents.join(', ')}] leader=${team.leader_agent}`);
+        }
     }
 }
 

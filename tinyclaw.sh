@@ -25,6 +25,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/daemon.sh"
 source "$SCRIPT_DIR/lib/messaging.sh"
 source "$SCRIPT_DIR/lib/agents.sh"
+source "$SCRIPT_DIR/lib/teams.sh"
 source "$SCRIPT_DIR/lib/update.sh"
 
 # --- Main command dispatch ---
@@ -278,6 +279,49 @@ case "${1:-}" in
                 ;;
         esac
         ;;
+    team)
+        case "${2:-}" in
+            list|ls)
+                team_list
+                ;;
+            add)
+                team_add
+                ;;
+            remove|rm)
+                if [ -z "$3" ]; then
+                    echo "Usage: $0 team remove <team_id>"
+                    exit 1
+                fi
+                team_remove "$3"
+                ;;
+            show)
+                if [ -z "$3" ]; then
+                    echo "Usage: $0 team show <team_id>"
+                    exit 1
+                fi
+                team_show "$3"
+                ;;
+            *)
+                echo "Usage: $0 team {list|add|remove|show}"
+                echo ""
+                echo "Team Commands:"
+                echo "  list                   List all configured teams"
+                echo "  add                    Add a new team interactively"
+                echo "  remove <id>            Remove a team"
+                echo "  show <id>              Show team configuration"
+                echo ""
+                echo "Examples:"
+                echo "  $0 team list"
+                echo "  $0 team add"
+                echo "  $0 team show dev"
+                echo "  $0 team remove dev"
+                echo ""
+                echo "In chat, use '@team_id message' to route to a team's leader agent."
+                echo "Agents can collaborate by mentioning @teammate in responses."
+                exit 1
+                ;;
+        esac
+        ;;
     attach)
         tmux attach -t "$TMUX_SESSION"
         ;;
@@ -291,7 +335,7 @@ case "${1:-}" in
         local_names=$(IFS='|'; echo "${ALL_CHANNELS[*]}")
         echo -e "${BLUE}TinyClaw - Claude Code + Messaging Channels${NC}"
         echo ""
-        echo "Usage: $0 {start|stop|restart|status|setup|send|logs|reset|channels|provider|model|agent|update|attach}"
+        echo "Usage: $0 {start|stop|restart|status|setup|send|logs|reset|channels|provider|model|agent|team|update|attach}"
         echo ""
         echo "Commands:"
         echo "  start                    Start TinyClaw"
@@ -306,6 +350,7 @@ case "${1:-}" in
         echo "  provider [name] [--model model]  Show or switch AI provider"
         echo "  model [name]             Show or switch AI model"
         echo "  agent {list|add|remove|show|reset}  Manage agents"
+        echo "  team {list|add|remove|show}        Manage teams"
         echo "  update                   Update TinyClaw to latest version"
         echo "  attach                   Attach to tmux session"
         echo ""
@@ -316,7 +361,9 @@ case "${1:-}" in
         echo "  $0 model opus"
         echo "  $0 agent list"
         echo "  $0 agent add"
+        echo "  $0 team list"
         echo "  $0 send '@coder fix the bug'"
+        echo "  $0 send '@dev fix the auth bug'"
         echo "  $0 channels reset whatsapp"
         echo "  $0 logs telegram"
         echo ""

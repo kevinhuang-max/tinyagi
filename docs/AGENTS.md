@@ -550,14 +550,77 @@ interface ResponseData {
 
 State is managed by the CLI itself (claude or codex) through the `-c` flag and working directory isolation.
 
+## Teams
+
+Teams are named groups of agents that can collaborate by forwarding messages to each other via `@teammate` mentions in their responses.
+
+### How Team Collaboration Works
+
+1. User sends `@dev fix the auth bug` (where `dev` is a team with leader `coder`)
+2. Queue processor resolves `@dev` → team → leader agent `@coder`
+3. Coder's AI responds: `"I fixed the bug in auth.ts. @reviewer please check my changes"`
+4. Queue processor scans response, sees `@reviewer` is a teammate in team `dev`
+5. Queue processor calls reviewer with coder's response (prefixed with context)
+6. Reviewer responds: `"Changes look good, approved!"`
+7. Combined response sent to user: `@coder: ... \n---\n @reviewer: ...`
+
+The chain ends naturally when an agent responds without mentioning a teammate.
+
+### Team Configuration
+
+Teams are stored in `~/.tinyclaw/settings.json`:
+
+```json
+{
+  "teams": {
+    "dev": {
+      "name": "Development Team",
+      "agents": ["coder", "reviewer"],
+      "leader_agent": "coder"
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `name` | Human-readable display name |
+| `agents` | Array of agent IDs (must exist in `.agents`) |
+| `leader_agent` | Agent that receives `@team_id` messages first |
+
+Team IDs share the `@` routing namespace with agents, so no collisions are allowed.
+
+### Managing Teams
+
+**CLI Commands:**
+```bash
+tinyclaw team list                # List all teams
+tinyclaw team add                 # Add a new team (interactive)
+tinyclaw team show dev            # Show team configuration
+tinyclaw team remove dev          # Remove a team
+```
+
+**In-chat Commands:**
+```
+/team                             # List all teams
+@dev fix the auth bug             # Route to team leader
+@coder fix the auth bug           # Route directly to agent (team context still active)
+```
+
+### Direct Agent Routing with Teams
+
+When you message an agent directly (e.g., `@coder fix this`), team context is automatically activated if the agent belongs to a team. This means teammate mentions in the agent's response will still be followed.
+
+### Agent AGENTS.md Updates
+
+When an agent is added to a team, its `AGENTS.md` file is automatically updated with a team collaboration section listing teammates and instructions for using `@teammate_id` mentions.
+
 ## Future Enhancements
 
 Potential features for agent management:
 
-- **Agent delegation:** Agents can call other agents
 - **Shared context:** Optional shared memory between agents
 - **Agent scheduling:** Time-based or event-based agent activation
-- **Agent groups:** Organize agents into hierarchies
 - **Web dashboard:** Visual agent management and monitoring
 - **Agent analytics:** Track usage, performance per agent
 - **Workspace templates:** Pre-configured agent workspaces for common use cases

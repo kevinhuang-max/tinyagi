@@ -123,6 +123,15 @@ Commands work with `tinyclaw` (if CLI installed) or `./tinyclaw.sh` (direct scri
 | `agent remove <id>` | Remove an agent             | `tinyclaw agent remove coder` |
 | `agent reset <id>`  | Reset agent conversation    | `tinyclaw agent reset coder`  |
 
+### Team Commands
+
+| Command             | Description                | Example                    |
+| ------------------- | -------------------------- | -------------------------- |
+| `team list`         | List all configured teams  | `tinyclaw team list`       |
+| `team add`          | Add new team (interactive) | `tinyclaw team add`        |
+| `team show <id>`    | Show team configuration    | `tinyclaw team show dev`   |
+| `team remove <id>`  | Remove a team              | `tinyclaw team remove dev` |
+
 ### Configuration Commands
 
 | Command                           | Description                  | Example                                          |
@@ -180,7 +189,9 @@ These commands work in Discord, Telegram, and WhatsApp:
 | Command             | Description                                  | Example                              |
 | ------------------- | -------------------------------------------- | ------------------------------------ |
 | `@agent_id message` | Route message to specific agent              | `@coder fix the bug`                 |
+| `@team_id message`  | Route message to team leader                 | `@dev fix the auth bug`              |
 | `/agent`            | List all available agents                    | `/agent`                             |
+| `/team`             | List all available teams                     | `/team`                              |
 | `@agent_id /reset`  | Reset specific agent conversation            | `@coder /reset`                      |
 | `/reset`            | Reset conversation (WhatsApp/global)         | `/reset` or `!reset`                 |
 | `message`           | Send to default agent (no prefix)            | `help me with this`                  |
@@ -402,6 +413,16 @@ Claude: "Don't forget to call mom!"
 @coder Review and fix bugs in auth.ts
 @writer Document the changes
 @reviewer Check the documentation quality
+```
+
+### Team Collaboration
+
+```
+@dev fix the auth bug
+# → Routes to team leader (@coder)
+# → Coder fixes bug, mentions @reviewer in response
+# → Reviewer automatically invoked, reviews changes
+# → Combined response sent back to user
 ```
 
 ### Cross-Device Access
