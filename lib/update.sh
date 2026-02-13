@@ -111,7 +111,7 @@ show_update_notification() {
     echo -e "  Current: ${RED}v${current_version}${NC}"
     echo -e "  Latest:  ${GREEN}v${latest_version}${NC}"
     echo ""
-    echo -e "  Update:  ${GREEN}./tinyclaw.sh update${NC}"
+    echo -e "  Update:  ${GREEN}tinyclaw update${NC}"
     echo -e "  Changes: ${BLUE}https://github.com/$GITHUB_REPO/releases/v${latest_version}${NC}"
     echo ""
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -237,6 +237,6 @@ do_update() {
     echo "Backup location: $backup_dir"
     echo ""
     echo "Start TinyClaw:"
-    echo -e "  ${GREEN}./tinyclaw.sh start${NC}"
+    echo -e "  ${GREEN}tinyclaw start${NC}"
     echo ""
 }

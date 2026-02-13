@@ -299,7 +299,7 @@ This prevents confusion and teases the upcoming feature!
 Creates `~/.tinyclaw/reset_flag`:
 
 ```bash
-./tinyclaw.sh reset
+tinyclaw reset
 ```
 
 Next message to **any agent** starts fresh (no `-c` flag).
@@ -309,7 +309,7 @@ Next message to **any agent** starts fresh (no `-c` flag).
 Creates `~/workspace/{agent_id}/reset_flag`:
 
 ```bash
-./tinyclaw.sh agent reset coder
+tinyclaw agent reset coder
 # Or in chat:
 @coder /reset
 ```
@@ -436,12 +436,12 @@ tail -f ~/.tinyclaw/logs/queue.log
 
 **Messages stuck in incoming:**
 - Queue processor not running
-- Check: `./tinyclaw.sh status`
+- Check: `tinyclaw status`
 
 **Messages stuck in processing:**
 - AI CLI crashed or hung
 - Manual cleanup: `rm ~/.tinyclaw/queue/processing/*`
-- Restart: `./tinyclaw.sh restart`
+- Restart: `tinyclaw restart`
 
 **No responses generated:**
 - Check agent routing (wrong @agent_id?)

@@ -11,6 +11,8 @@ npm install -g agent-browser      # all platforms
 brew install agent-browser        # macOS
 ```
 
+Prioritize using sub-agents (tasks) to run browser actions using agent-browser.
+
 # Browser Automation with agent-browser
 
 ## Core Workflow

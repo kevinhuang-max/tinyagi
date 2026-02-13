@@ -122,7 +122,7 @@ case "${1:-}" in
                         jq ".models.provider = \"anthropic\"" "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
                         echo -e "${GREEN}✓ Switched to Anthropic provider${NC}"
                         echo ""
-                        echo "Use './tinyclaw.sh model {sonnet|opus}' to set the model."
+                        echo "Use 'tinyclaw model {sonnet|opus}' to set the model."
                     fi
                     ;;
                 openai)
@@ -144,7 +144,7 @@ case "${1:-}" in
                         jq ".models.provider = \"openai\"" "$SETTINGS_FILE" > "$tmp_file" && mv "$tmp_file" "$SETTINGS_FILE"
                         echo -e "${GREEN}✓ Switched to OpenAI/Codex provider${NC}"
                         echo ""
-                        echo "Use './tinyclaw.sh model {gpt-5.3-codex|gpt-5.2}' to set the model."
+                        echo "Use 'tinyclaw model {gpt-5.3-codex|gpt-5.2}' to set the model."
                         echo "Note: Make sure you have the 'codex' CLI installed and authenticated."
                     fi
                     ;;

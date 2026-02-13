@@ -50,7 +50,7 @@ start_daemon() {
     fi
 
     if [ ${#ACTIVE_CHANNELS[@]} -eq 0 ]; then
-        echo -e "${RED}No channels configured. Run './tinyclaw.sh setup' to reconfigure${NC}"
+        echo -e "${RED}No channels configured. Run 'tinyclaw setup' to reconfigure${NC}"
         return 1
     fi
 
@@ -59,7 +59,7 @@ start_daemon() {
         local token_key="${CHANNEL_TOKEN_KEY[$ch]:-}"
         if [ -n "$token_key" ] && [ -z "${CHANNEL_TOKENS[$ch]:-}" ]; then
             echo -e "${RED}${CHANNEL_DISPLAY[$ch]} is configured but bot token is missing${NC}"
-            echo "Run './tinyclaw.sh setup' to reconfigure"
+            echo "Run 'tinyclaw setup' to reconfigure"
             return 1
         fi
     done
@@ -188,13 +188,13 @@ start_daemon() {
             echo -e "${RED}WhatsApp didn't connect within 60 seconds${NC}"
             echo ""
             echo -e "${YELLOW}Try restarting TinyClaw:${NC}"
-            echo -e "  ${GREEN}./tinyclaw.sh restart${NC}"
+            echo -e "  ${GREEN}tinyclaw restart${NC}"
             echo ""
             echo "Or check WhatsApp client status:"
             echo -e "  ${GREEN}tmux attach -t $TMUX_SESSION${NC}"
             echo ""
             echo "Or check logs:"
-            echo -e "  ${GREEN}./tinyclaw.sh logs whatsapp${NC}"
+            echo -e "  ${GREEN}tinyclaw logs whatsapp${NC}"
             echo ""
         fi
     fi
@@ -205,8 +205,8 @@ start_daemon() {
 
     echo ""
     echo -e "${GREEN}Commands:${NC}"
-    echo "  Status:  ./tinyclaw.sh status"
-    echo "  Logs:    ./tinyclaw.sh logs [$channel_names|queue]"
+    echo "  Status:  tinyclaw status"
+    echo "  Logs:    tinyclaw logs [$channel_names|queue]"
     echo "  Attach:  tmux attach -t $TMUX_SESSION"
     echo ""
 
@@ -265,7 +265,7 @@ status_daemon() {
         echo "  Attach: tmux attach -t $TMUX_SESSION"
     else
         echo -e "Tmux Session: ${RED}Not Running${NC}"
-        echo "  Start: ./tinyclaw.sh start"
+        echo "  Start: tinyclaw start"
     fi
 
     echo ""
