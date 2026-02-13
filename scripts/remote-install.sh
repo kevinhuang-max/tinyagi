@@ -81,14 +81,19 @@ echo ""
 # Check if already installed
 if [ -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}TinyClaw is already installed at $INSTALL_DIR${NC}"
+    echo "Settings and user data will be preserved."
     echo ""
-    read -p "Re-install? (settings and user data will be preserved) (y/N) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Installation cancelled."
-        exit 0
+    # When piped from curl, stdin is not a terminal — auto-accept
+    if [ -t 0 ]; then
+        read -p "Re-install? (y/N) " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 0
+        fi
+    else
+        echo "Non-interactive mode detected, proceeding with re-install..."
     fi
-    # Don't rm -rf — preserve settings.json, queue/, logs/, channels/, etc.
 fi
 
 # Detect if we can use pre-built bundle

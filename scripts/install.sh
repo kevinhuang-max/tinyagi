@@ -51,11 +51,13 @@ if [ -L "$INSTALL_DIR/tinyclaw" ]; then
     if [ "$EXISTING_TARGET" = "$WRAPPER" ]; then
         echo -e "${YELLOW}TinyClaw is already installed at $INSTALL_DIR/tinyclaw${NC}"
         echo ""
-        read -p "Reinstall? (y/N) " -n 1 -r
-        echo ""
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Installation cancelled."
-            exit 0
+        if [ -t 0 ]; then
+            read -p "Reinstall? (y/N) " -n 1 -r
+            echo ""
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                echo "Installation cancelled."
+                exit 0
+            fi
         fi
         rm "$INSTALL_DIR/tinyclaw"
     else
@@ -63,11 +65,13 @@ if [ -L "$INSTALL_DIR/tinyclaw" ]; then
         echo "  Current: $EXISTING_TARGET"
         echo "  New:     $WRAPPER"
         echo ""
-        read -p "Replace it? (y/N) " -n 1 -r
-        echo ""
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Installation cancelled."
-            exit 0
+        if [ -t 0 ]; then
+            read -p "Replace it? (y/N) " -n 1 -r
+            echo ""
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                echo "Installation cancelled."
+                exit 0
+            fi
         fi
         rm "$INSTALL_DIR/tinyclaw"
     fi
