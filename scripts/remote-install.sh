@@ -181,8 +181,10 @@ chmod +x lib/setup-wizard.sh
 chmod +x lib/heartbeat-cron.sh
 chmod +x lib/update.sh
 
-# Run the install script
-"$INSTALL_DIR/scripts/install.sh"
+# Run the install script (suppress its output — we show our own)
+"$INSTALL_DIR/scripts/install.sh" > /dev/null 2>&1
+
+echo -e "${GREEN}✓ CLI command installed${NC}"
 
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
