@@ -18,7 +18,7 @@
 </div>
 
 <div align="center">
-  <video src="https://github.com/jlia0/tinyclaw/raw/main/docs/videos/tinyclaw.mp4" width="600" controls></video>
+  <video src="https://github.com/user-attachments/assets/c5ef5d3c-d9cf-4a00-b619-c31e4380df2e" width="600" controls></video>
 </div>
 
 ## ✨ Features
