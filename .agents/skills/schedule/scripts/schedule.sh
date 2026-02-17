@@ -89,8 +89,9 @@ generate_label() {
 build_cron_command() {
     local agent="$1" message="$2" channel="$3" sender="$4" label="$5"
 
-    # Escape double quotes in the message for JSON safety
-    local escaped_message="${message//\"/\\\"}"
+    # Escape backslashes and double quotes in the message for JSON safety
+    local escaped_message="${message//\\/\\\\}"
+    escaped_message="${escaped_message//\"/\\\"}"
 
     # Write a per-schedule helper script that cron will call.
     # This avoids all crontab % escaping issues by keeping logic in a file.

@@ -25,6 +25,17 @@ import {
 import { log, emitEvent } from './lib/logging';
 import { parseAgentRouting, findTeamForAgent, getAgentResetFlag, extractTeammateMentions } from './lib/routing';
 import { invokeAgent } from './lib/invoke';
+import { jsonrepair } from 'jsonrepair';
+
+/** Parse JSON with automatic repair for malformed content (e.g. bad escapes). */
+function safeParseJSON<T = unknown>(raw: string, label?: string): T {
+    try {
+        return JSON.parse(raw);
+    } catch {
+        log('WARN', `Invalid JSON${label ? ` in ${label}` : ''}, attempting auto-repair`);
+        return JSON.parse(jsonrepair(raw));
+    }
+}
 
 // Ensure directories exist
 [QUEUE_INCOMING, QUEUE_OUTGOING, QUEUE_PROCESSING, FILES_DIR, path.dirname(LOG_FILE)].forEach(dir => {
@@ -228,7 +239,7 @@ async function processMessage(messageFile: string): Promise<void> {
         fs.renameSync(messageFile, processingFile);
 
         // Read message
-        const messageData: MessageData = JSON.parse(fs.readFileSync(processingFile, 'utf8'));
+        const messageData: MessageData = safeParseJSON(fs.readFileSync(processingFile, 'utf8'), path.basename(processingFile));
         const { channel, sender, message: rawMessage, timestamp, messageId } = messageData;
         const isInternal = !!messageData.conversationId;
 
@@ -482,7 +493,7 @@ const agentProcessingChains = new Map<string, Promise<void>>();
  */
 function peekAgentId(filePath: string): string {
     try {
-        const messageData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const messageData = safeParseJSON<MessageData>(fs.readFileSync(filePath, 'utf8'));
         const settings = getSettings();
         const agents = getAgents(settings);
         const teams = getTeams(settings);
