@@ -33,6 +33,7 @@
 - ✅ **Live TUI dashboard** - Real-time team visualizer for monitoring agent chains
 - ✅ **Persistent sessions** - Conversation context maintained across restarts
 - ✅ **SQLite queue** - Atomic transactions, retry logic, dead-letter management
+- ✅ **Plugin system** - Extend TinyClaw with custom plugins for message hooks and event listeners
 - ✅ **24/7 operation** - Runs in tmux for always-on availability
 
 ## Community
@@ -550,6 +551,7 @@ All channels share agent conversations!
 - [TEAMS.md](docs/TEAMS.md) - Team collaboration, chain execution, and visualizer
 - [QUEUE.md](docs/QUEUE.md) - Queue system and message flow
 - [tinyoffice/README.md](tinyoffice/README.md) - TinyOffice web portal
+- [PLUGINS.md](docs/PLUGINS.md) - Plugin development guide
 - [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Common issues and solutions
 
 ## 🐛 Troubleshooting
