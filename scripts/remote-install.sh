@@ -67,6 +67,18 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
     exit 1
 fi
 
+# Check bash version (TinyClaw requires bash 4+ for associative arrays)
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo -e "${YELLOW}⚠ bash ${BASH_VERSION} detected — TinyClaw requires bash 4.0+${NC}"
+    if [ "$(uname)" = "Darwin" ]; then
+        echo "  macOS ships with bash 3.2. Install a newer version:"
+        echo "    brew install bash"
+    else
+        echo "  Please upgrade bash before running TinyClaw."
+    fi
+    echo ""
+fi
+
 echo -e "${GREEN}✓ All dependencies found${NC}"
 echo ""
 
@@ -185,19 +197,28 @@ chmod +x lib/heartbeat-cron.sh
 chmod +x lib/update.sh
 
 # Run the install script (creates symlink and configures PATH)
-"$INSTALL_DIR/scripts/install.sh" > /dev/null 2>&1
+"$INSTALL_DIR/scripts/install.sh" || true
 
 echo -e "${GREEN}✓ CLI command installed${NC}"
 
-# Detect shell profile and ensure ~/.local/bin is in PATH
-# (install.sh may have already written to the profile, but this ensures
-# the remote-install output gives the user the right guidance)
+# Ensure the tinyclaw symlink directory is in PATH
 NEED_RESTART=false
 
 if ! command -v tinyclaw &> /dev/null; then
-    # Check if the symlink landed in ~/.local/bin
+    # Find where the symlink was installed
+    SYMLINK_DIR=""
     if [ -L "$HOME/.local/bin/tinyclaw" ]; then
+        SYMLINK_DIR="$HOME/.local/bin"
+        PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+        GREP_PATTERN='.local/bin'
+    elif [ -L "/usr/local/bin/tinyclaw" ]; then
+        # /usr/local/bin should already be in PATH; nothing to do
+        SYMLINK_DIR=""
+    fi
+
+    if [ -n "$SYMLINK_DIR" ]; then
         SHELL_NAME="$(basename "$SHELL")"
+        SHELL_PROFILE=""
         case "$SHELL_NAME" in
             zsh)  SHELL_PROFILE="$HOME/.zshrc" ;;
             bash)
@@ -210,14 +231,12 @@ if ! command -v tinyclaw &> /dev/null; then
             *)    SHELL_PROFILE="$HOME/.profile" ;;
         esac
 
-        PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-
         # Add to profile if not already present
-        if [ -n "$SHELL_PROFILE" ] && ! grep -qF '.local/bin' "$SHELL_PROFILE" 2>/dev/null; then
+        if [ -n "$SHELL_PROFILE" ] && ! grep -qF "$GREP_PATTERN" "$SHELL_PROFILE" 2>/dev/null; then
             echo "" >> "$SHELL_PROFILE"
             echo "# Added by TinyClaw installer" >> "$SHELL_PROFILE"
             echo "$PATH_LINE" >> "$SHELL_PROFILE"
-            echo -e "${GREEN}✓ Added ~/.local/bin to PATH in ${SHELL_PROFILE/#$HOME/\~}${NC}"
+            echo -e "${GREEN}✓ Added $SYMLINK_DIR to PATH in ${SHELL_PROFILE/#$HOME/\~}${NC}"
         fi
 
         NEED_RESTART=true

@@ -7,6 +7,16 @@
 #   3. Fill in the CHANNEL_* registry arrays in lib/common.sh
 #   4. Run setup wizard to enable it
 
+# Require bash 4+ (for associative arrays)
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "Error: TinyClaw requires bash 4.0 or later (found ${BASH_VERSION})."
+    if [ "$(uname)" = "Darwin" ]; then
+        echo "macOS ships with bash 3.2. Install a newer version with:"
+        echo "  brew install bash"
+    fi
+    exit 1
+fi
+
 # SCRIPT_DIR = repo root (where bash scripts live)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
