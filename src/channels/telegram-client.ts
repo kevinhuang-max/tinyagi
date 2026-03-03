@@ -77,6 +77,7 @@ function buildUniqueFilePath(dir: string, preferredName: string): string {
 // Track pending messages (waiting for response)
 const pendingMessages = new Map<string, PendingMessage>();
 let processingOutgoingQueue = false;
+let lastPollingActivity = Date.now();
 
 // Logger
 function log(level: string, message: string): void {
@@ -263,6 +264,7 @@ const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 // Bot ready
 bot.getMe().then(async (me: TelegramBot.User) => {
     log('INFO', `Telegram bot connected as @${me.username}`);
+    lastPollingActivity = Date.now();
 
     // Register bot commands so they appear in Telegram's "/" menu
     await bot.setMyCommands([
@@ -564,6 +566,7 @@ async function checkOutgoingQueue(): Promise<void> {
         }
     } catch (error) {
         log('ERROR', `Outgoing queue error: ${(error as Error).message}`);
+
     } finally {
         processingOutgoingQueue = false;
     }
@@ -581,9 +584,45 @@ setInterval(() => {
     }
 }, 4000);
 
-// Handle polling errors
+// Handle polling errors with automatic recovery
 bot.on('polling_error', (error: Error) => {
     log('ERROR', `Polling error: ${error.message}`);
+
+    // ETELEGRAM 409 = another instance running; EFATAL = unrecoverable
+    if (error.message.includes('EFATAL') || error.message.includes('409')) {
+        log('WARN', 'Fatal polling error detected, restarting polling in 5s...');
+        bot.stopPolling();
+        setTimeout(() => {
+            log('INFO', 'Restarting polling after fatal error...');
+            bot.startPolling();
+            lastPollingActivity = Date.now();
+        }, 5000);
+    }
+});
+
+// Track polling activity — any message or polling_error means polling is alive
+bot.on('message', () => { lastPollingActivity = Date.now(); });
+
+// Watchdog: if no polling activity for 2 minutes, restart polling
+setInterval(() => {
+    const silentMs = Date.now() - lastPollingActivity;
+    if (silentMs > 2 * 60 * 1000) {
+        log('WARN', `No polling activity for ${Math.round(silentMs / 1000)}s, restarting polling...`);
+        bot.stopPolling();
+        setTimeout(() => {
+            bot.startPolling();
+            lastPollingActivity = Date.now();
+            log('INFO', 'Polling restarted by watchdog');
+        }, 2000);
+    }
+}, 30000);
+
+// Catch unhandled errors so we can see what kills the bot
+process.on('unhandledRejection', (reason) => {
+    log('ERROR', `Unhandled rejection: ${reason}`);
+});
+process.on('uncaughtException', (error) => {
+    log('ERROR', `Uncaught exception: ${error.message}\n${error.stack}`);
 });
 
 // Graceful shutdown
