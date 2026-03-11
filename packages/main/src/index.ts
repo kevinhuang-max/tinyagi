@@ -12,17 +12,17 @@ import {
     MessageJobData,
     getSettings, getAgents, getTeams, LOG_FILE, CHATS_DIR, FILES_DIR,
     log, emitEvent,
-    parseAgentRouting, findTeamForAgent, getAgentResetFlag,
+    parseAgentRouting, getAgentResetFlag,
     invokeAgent,
-    loadPlugins, runIncomingHooks, runOutgoingHooks,
-    handleLongResponse, collectFiles,
+    loadPlugins, runIncomingHooks,
+    streamResponse,
     initQueueDb, getPendingAgents, claimAllPendingMessages,
-    completeMessage, failMessage, enqueueResponse,
+    completeMessage, failMessage,
     recoverStaleMessages, pruneAckedResponses, pruneCompletedMessages,
     closeQueueDb, queueEvents,
 } from '@tinyclaw/core';
 import { startApiServer } from '@tinyclaw/server';
-import { conversations } from '@tinyclaw/teams';
+import { conversations, handleTeamResponse } from '@tinyclaw/teams';
 
 // Ensure directories exist
 [FILES_DIR, path.dirname(LOG_FILE), CHATS_DIR].forEach(dir => {
@@ -30,6 +30,8 @@ import { conversations } from '@tinyclaw/teams';
         fs.mkdirSync(dir, { recursive: true });
     }
 });
+
+// ── Message Processing ──────────────────────────────────────────────────────
 
 async function processMessage(dbMsg: any): Promise<void> {
     const data: MessageJobData = {
@@ -57,7 +59,7 @@ async function processMessage(dbMsg: any): Promise<void> {
     const teams = getTeams(settings);
     const workspacePath = settings?.workspace?.path || path.join(require('os').homedir(), 'tinyclaw-workspace');
 
-    // Route message to agent
+    // ── Route message to agent ──────────────────────────────────────────────
     let agentId: string;
     let message: string;
     let isTeamRouted = false;
@@ -86,17 +88,15 @@ async function processMessage(dbMsg: any): Promise<void> {
         emitEvent('agent_routed', { agentId, agentName: agent.name, provider: agent.provider, model: agent.model, isTeamRouted });
     }
 
-    // Check for per-agent reset
+    // ── Invoke agent ────────────────────────────────────────────────────────
     const agentResetFlag = getAgentResetFlag(agentId, workspacePath);
     const shouldReset = fs.existsSync(agentResetFlag);
     if (shouldReset) {
         fs.unlinkSync(agentResetFlag);
     }
 
-    // Run incoming hooks
     ({ text: message } = await runIncomingHooks(message, { channel, sender, messageId, originalMessage: rawMessage }));
 
-    // Invoke agent
     emitEvent('chain_step_start', { agentId, agentName: agent.name, fromAgent: data.fromAgent || null });
     let response: string;
     try {
@@ -107,67 +107,41 @@ async function processMessage(dbMsg: any): Promise<void> {
         log('ERROR', `${providerLabel} error (agent: ${agentId}): ${(error as Error).message}`);
         response = "Sorry, I encountered an error processing your request. Please check the queue logs.";
     }
-
     emitEvent('chain_step_done', { agentId, agentName: agent.name, responseLength: response.length, responseText: response });
 
-    // Check if this agent is part of a team
-    const teamContext = isTeamRouted
-        ? (() => {
-            for (const [tid, t] of Object.entries(teams)) {
-                if (t.leader_agent === agentId && t.agents.includes(agentId)) {
-                    return { teamId: tid, team: t };
-                }
-            }
-            return findTeamForAgent(agentId, teams);
-        })()
-        : findTeamForAgent(agentId, teams);
+    // ── Response routing ────────────────────────────────────────────────────
+    // Always try team orchestration first — handles team-routed, internal,
+    // AND direct messages to agents that belong to a team.
 
-    if (teamContext && !isInternal) {
-        emitEvent('team_response', {
-            agentId,
-            response,
-            teamId: teamContext.teamId,
-            channel,
-            sender,
-            senderId: data.senderId || null,
-            messageId,
-            originalMessage: rawMessage,
-            isTeamRouted,
+    const handled = await handleTeamResponse({
+        agentId, response, isTeamRouted, data, agents, teams,
+    });
+    if (!handled) {
+        await sendDirectResponse(response, {
+            channel, sender, senderId: data.senderId,
+            messageId, originalMessage: rawMessage, agentId,
         });
-    }
-
-    // Enqueue response for non-team or internal messages
-    if (!teamContext || isInternal) {
-        let finalResponse = response.trim();
-
-        const outboundFilesSet = new Set<string>();
-        collectFiles(finalResponse, outboundFilesSet);
-        const outboundFiles = Array.from(outboundFilesSet);
-        if (outboundFiles.length > 0) {
-            finalResponse = finalResponse.replace(/\[send_file:\s*[^\]]+\]/g, '').trim();
-        }
-
-        const { text: hookedResponse, metadata } = await runOutgoingHooks(finalResponse, { channel, sender, messageId, originalMessage: rawMessage });
-        const { message: responseMessage, files: allFiles } = handleLongResponse(hookedResponse, outboundFiles);
-
-        enqueueResponse({
-            channel,
-            sender,
-            senderId: data.senderId,
-            message: responseMessage,
-            originalMessage: rawMessage,
-            messageId,
-            agent: agentId,
-            files: allFiles.length > 0 ? allFiles : undefined,
-            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-        });
-
-        log('INFO', `Response ready [${channel}] ${sender} via agent:${agentId} (${finalResponse.length} chars)`);
-        emitEvent('response_ready', { channel, sender, agentId, responseLength: finalResponse.length, responseText: finalResponse, messageId });
     }
 }
 
-// Per-agent sequential processing chains
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+async function sendDirectResponse(
+    response: string,
+    ctx: { channel: string; sender: string; senderId?: string | null; messageId: string; originalMessage: string; agentId: string }
+): Promise<void> {
+    await streamResponse(response, {
+        channel: ctx.channel,
+        sender: ctx.sender,
+        senderId: ctx.senderId ?? undefined,
+        messageId: ctx.messageId,
+        originalMessage: ctx.originalMessage,
+        agentId: ctx.agentId,
+    });
+}
+
+// ── Queue Processing ────────────────────────────────────────────────────────
+
 const agentChains = new Map<string, Promise<void>>();
 
 async function processQueue(): Promise<void> {
@@ -223,7 +197,6 @@ function logAgentConfig(): void {
 
 initQueueDb();
 
-// Start the API server
 const apiServer = startApiServer(conversations);
 
 // Event-driven: process queue when a new message arrives
