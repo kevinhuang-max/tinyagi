@@ -341,3 +341,15 @@ function OverviewCard({ icon, title, value }: { icon: React.ReactNode; title: st
   );
 }
 
+function ApiEndpoint({ method, path, desc }: { method: string; path: string; desc: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold">{method}</span>
+      <div>
+        <code className="text-xs">{path}</code>
+        <p className="text-xs text-muted-foreground">{desc}</p>
+      </div>
+    </div>
+  );
+}
+
