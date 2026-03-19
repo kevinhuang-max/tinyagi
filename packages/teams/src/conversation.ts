@@ -29,7 +29,6 @@ export function postToChatRoom(
             fromAgent,
         });
     }
-    log('DEBUG', `Chat room message: @${fromAgent} → #${teamId} (${teamAgents.length - 1} teammate(s))`);
     return id;
 }
 

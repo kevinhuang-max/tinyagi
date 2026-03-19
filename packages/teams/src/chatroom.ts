@@ -34,7 +34,6 @@ export function groupChatroomMessages(messages: any[]): GroupedChatroomResult {
 function buildCombinedMessage(messages: any[]): any {
     const first = messages[0];
     const combinedMessage = messages.map(m => m.message).join('\n\n');
-    log('INFO', `Batched ${messages.length} chatroom messages for @${first.agent}:\n${combinedMessage}`);
 
     return {
         ...first,
