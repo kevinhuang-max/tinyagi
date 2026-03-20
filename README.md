@@ -73,6 +73,17 @@ That's it. TinyAGI auto-creates default settings, starts the daemon, and opens T
 - **Channels:** none initially — add later with `tinyagi channel setup`
 
 <details>
+<summary><b>Development (run from source repo)</b></summary>
+
+```bash
+git clone https://github.com/TinyAGI/tinyagi.git
+cd tinyagi && npm install && npm run build
+npx tinyagi start
+npx tinyagi agent list
+```
+</details>
+
+<details>
 <summary><b>Other installation methods</b></summary>
 
 **From Source:**
@@ -80,15 +91,6 @@ That's it. TinyAGI auto-creates default settings, starts the daemon, and opens T
 ```bash
 git clone https://github.com/TinyAGI/tinyagi.git
 cd tinyagi && npm install && ./scripts/install.sh
-```
-
-**Development (run from source repo):**
-
-```bash
-git clone https://github.com/TinyAGI/tinyagi.git
-cd tinyagi && npm install && npm run build
-npx tinyagi start
-npx tinyagi agent list
 ```
 
 </details>
@@ -697,4 +699,4 @@ MIT
 
 **TinyAGI - Tiny but mighty!** 🦞✨
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TinyAGI/tinyagi&type=date&legend=top-left)](https://www.star-history.com/#TinyAGI/tinyagi&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/image?repos=TinyAGI/tinyagi&type=date&legend=top-left)](https://www.star-history.com/?repos=TinyAGI%2Ftinyagi&type=date&legend=top-left)
