@@ -82,6 +82,15 @@ git clone https://github.com/TinyAGI/tinyagi.git
 cd tinyagi && npm install && ./scripts/install.sh
 ```
 
+**Development (run from source repo):**
+
+```bash
+git clone https://github.com/TinyAGI/tinyagi.git
+cd tinyagi && npm install && npm run build
+npx tinyagi start
+npx tinyagi agent list
+```
+
 </details>
 
 <details>

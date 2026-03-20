@@ -5,6 +5,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "bin": {
+    "tinyagi": "packages/cli/bin/tinyagi.mjs"
+  },
   "scripts": {
     "build": "tsc --build",
     "dev": "concurrently -k -n core,teams,server,main \"npm run dev -w @tinyagi/core\" \"npm run dev -w @tinyagi/teams\" \"npm run dev -w @tinyagi/server\" \"npm run dev -w @tinyagi/main\"",
