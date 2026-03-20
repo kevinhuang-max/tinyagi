@@ -1,525 +1,702 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { usePolling } from "@/lib/hooks";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  PixelOfficeScene,
+  PIXEL_SCENE_LAYOUT,
+  getTaskStationMemberSpot,
+  getLoungeMemberSpot,
+  type SceneAgent,
+  type SceneArchiveRoom,
+  type SceneBossRoom,
+  type SceneLounge,
+  type SceneQueueSnapshot,
+  type SceneResponseItem,
+  type SceneRouteTarget,
+  type SceneTaskStation,
+  type SceneTaskSummary,
+} from "@/components/pixel-office-scene";
+import { usePolling } from "@/lib/hooks";
+import {
+  getAgentMessages,
   getAgents,
+  getLogs,
+  getQueueStatus,
+  getResponses,
+  getSettings,
+  getTasks,
   getTeams,
-  sendMessage,
   subscribeToEvents,
   type AgentConfig,
-  type TeamConfig,
+  type AgentMessage,
   type EventData,
+  type QueueStatus,
+  type ResponseData,
+  type Settings,
+  type Task,
+  type TeamConfig,
 } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
-import { Send, Loader2 } from "lucide-react";
 
-// Sprite keys cycle for agents beyond the 3 built-in chars
-const SPRITE_KEYS = ["char_1", "char_2", "char_3", "char_player"];
-
-// Desk positions in the office grid (normalized 0-1 coordinates)
-const DESK_POSITIONS = [
-  { x: 0.14, y: 0.21 },
-  { x: 0.25, y: 0.21 },
-  { x: 0.36, y: 0.21 },
-  { x: 0.47, y: 0.21 },
-  { x: 0.14, y: 0.36 },
-  { x: 0.25, y: 0.36 },
-  { x: 0.36, y: 0.36 },
-  { x: 0.47, y: 0.36 },
-  { x: 0.61, y: 0.63 },
-  { x: 0.72, y: 0.63 },
-  { x: 0.83, y: 0.63 },
-  { x: 0.61, y: 0.78 },
-  { x: 0.72, y: 0.78 },
-  { x: 0.83, y: 0.78 },
-];
-
-// Meeting point offset so two agents don't overlap
-const MEETING_OFFSET = 0.03;
-
-interface SpeechBubble {
-  id: string;
-  agentId: string;
-  message: string;
-  timestamp: number;
-  targetAgents: string[];
-}
-
-// Extract all @mention targets from message text
-function extractTargets(msg: string): string[] {
-  const targets: string[] = [];
-  // Match all [@agent: ...] blocks
-  const bracketMatches = msg.matchAll(/\[@(\w[\w-]*?):/g);
-  for (const m of bracketMatches) {
-    if (!targets.includes(m[1])) targets.push(m[1]);
-  }
-  // Fallback: bare @agent at start
-  if (targets.length === 0) {
-    const atMatch = msg.match(/^@(\w[\w-]*)/);
-    if (atMatch) targets.push(atMatch[1]);
-  }
-  return targets;
-}
-
-// Parse message into segments: plain text and [@agent: message] blocks
-interface MsgSegment {
-  type: "mention" | "text";
-  agent?: string;
-  text: string;
-}
-
-function parseMessage(msg: string): MsgSegment[] {
-  const segments: MsgSegment[] = [];
-  // Match [@agent: content] blocks
-  const regex = /\[@(\w[\w-]*?):\s*(.*?)\]/g;
-  let lastIndex = 0;
-  let match;
-
-  while ((match = regex.exec(msg)) !== null) {
-    // Text before this match
-    if (match.index > lastIndex) {
-      const before = msg.slice(lastIndex, match.index).trim();
-      if (before) segments.push({ type: "text", text: before });
-    }
-    segments.push({ type: "mention", agent: match[1], text: match[2] });
-    lastIndex = regex.lastIndex;
-  }
-
-  // Remaining text after last match
-  if (lastIndex < msg.length) {
-    const remaining = msg.slice(lastIndex).trim();
-    if (remaining) segments.push({ type: "text", text: remaining });
-  }
-
-  // If no brackets found, just return the whole message
-  if (segments.length === 0) {
-    segments.push({ type: "text", text: msg });
-  }
-
-  return segments;
-}
-
-// Lerp between two values
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
+import { ArchivePanel, type ArchivePanelId } from "@/components/office/archive-panel";
+import { ConversationPanel } from "@/components/office/conversation-panel";
+import { OverlayBubbles } from "@/components/office/overlay-bubbles";
+import {
+  AGENT_COLORS,
+  AGENT_SESSION_RELEASE_MS,
+  ARCHIVE_BUTTONS,
+  OFFICE_STATION_COUNT,
+  buildTeamGroups,
+  clamp,
+  easeInOut,
+  extractTargets,
+  interpolatePoint,
+  isErrorMessage,
+  responseTone,
+  responseSubtitle,
+  routeTone,
+  taskTone,
+  trimText,
+  type AgentWorkSession,
+  type LiveBubble,
+  type OverlayBubble,
+  type StationAssignment,
+} from "@/components/office/types";
 
 export default function OfficePage() {
-  const { data: agents } = usePolling<Record<string, AgentConfig>>(getAgents, 0);
-  const { data: teams } = usePolling<Record<string, TeamConfig>>(getTeams, 0);
-  const [bubbles, setBubbles] = useState<SpeechBubble[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [sending, setSending] = useState(false);
+  const { data: agents } = usePolling<Record<string, AgentConfig>>(getAgents, 5000);
+  const { data: teams } = usePolling<Record<string, TeamConfig>>(getTeams, 5000);
+  const { data: tasks } = usePolling<Task[]>(getTasks, 4000);
+  const { data: queueStatus } = usePolling<QueueStatus>(getQueueStatus, 2500);
+  const { data: responses } = usePolling<ResponseData[]>(() => getResponses(6), 4000);
+  const { data: settings } = usePolling<Settings>(getSettings, 10000);
+  const { data: logs } = usePolling<{ lines: string[] }>(() => getLogs(40), 5000);
+  const { data: agentHistories } = usePolling<Record<string, AgentMessage[]>>(
+    async () => {
+      if (!agents) return {};
+      const entries = await Promise.all(
+        Object.keys(agents).map(async (agentId) => [agentId, await getAgentMessages(agentId, 40)] as const),
+      );
+      return Object.fromEntries(entries);
+    },
+    5000,
+    [agents],
+  );
 
+  const [bubbles, setBubbles] = useState<LiveBubble[]>([]);
   const [connected, setConnected] = useState(false);
+  const [clock, setClock] = useState({ now: Date.now(), frame: 0 });
+  const [archivePanel, setArchivePanel] = useState<ArchivePanelId | null>(null);
+  const [agentWorkSessions, setAgentWorkSessions] = useState<Record<string, AgentWorkSession>>({});
+
   const seenRef = useRef(new Set<string>());
+  const rootSessionsRef = useRef(new Map<string, { startedAt: number; agentIds: Set<string>; completedAt?: number }>());
+  const openRootOrderRef = useRef<string[]>([]);
 
-  const agentEntries = agents ? Object.entries(agents) : [];
-  const teamEntries = teams ? Object.entries(teams) : [];
+  // ── Clock tick ──────────────────────────────────────────────────────────
 
-  // Assign agents to desk positions and sprite images
-  const agentPositions = useMemo(
-    () =>
-      agentEntries.map(([id, agent], i) => ({
-        id,
-        agent,
-        deskPos: DESK_POSITIONS[i % DESK_POSITIONS.length],
-        sprite: `/assets/office/${SPRITE_KEYS[i % SPRITE_KEYS.length]}.png`,
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agentEntries.map(([id]) => id).join(",")]
-  );
-
-  // Build desk position lookup
-  const deskPosMap = useMemo(
-    () => new Map(agentPositions.map((a) => [a.id, a.deskPos])),
-    [agentPositions]
-  );
-
-  // Compute where each agent currently is: at desk or walking to meet someone
-  const agentRenderPositions = useMemo(() => {
-    const positions = new Map<string, { x: number; y: number }>();
-
-    // Start everyone at their desk
-    for (const ap of agentPositions) {
-      positions.set(ap.id, { x: ap.deskPos.x, y: ap.deskPos.y + 0.06 });
-    }
-
-    // For each active bubble with targets, move agents toward each other
-    // Find the most recent bubble per agent
-    const latestBubblePerAgent = new Map<string, SpeechBubble>();
-    for (const b of bubbles) {
-      const firstTarget = b.targetAgents[0];
-      if (firstTarget && deskPosMap.has(b.agentId) && deskPosMap.has(firstTarget)) {
-        const existing = latestBubblePerAgent.get(b.agentId);
-        if (!existing || b.timestamp > existing.timestamp) {
-          latestBubblePerAgent.set(b.agentId, b);
-        }
-      }
-    }
-
-    // Move agents toward each other (use first target for position)
-    for (const [agentId, bubble] of latestBubblePerAgent) {
-      const firstTarget = bubble.targetAgents[0]!;
-      const fromDesk = deskPosMap.get(agentId)!;
-      const toDesk = deskPosMap.get(firstTarget)!;
-
-      const midX = (fromDesk.x + toDesk.x) / 2;
-      const midY = (fromDesk.y + toDesk.y) / 2 + 0.06;
-
-      const dx = toDesk.x - fromDesk.x;
-      const dy = toDesk.y - fromDesk.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const nx = dx / dist;
-      const ny = dy / dist;
-
-      positions.set(agentId, {
-        x: midX - nx * MEETING_OFFSET,
-        y: midY - ny * MEETING_OFFSET,
-      });
-
-      // Also nudge all targeted agents toward midpoint if not already speaking
-      for (const targetId of bubble.targetAgents) {
-        if (!latestBubblePerAgent.has(targetId) && deskPosMap.has(targetId)) {
-          const tDesk = deskPosMap.get(targetId)!;
-          const tdx = tDesk.x - fromDesk.x;
-          const tdy = tDesk.y - fromDesk.y;
-          const tdist = Math.sqrt(tdx * tdx + tdy * tdy) || 1;
-          positions.set(targetId, {
-            x: (fromDesk.x + tDesk.x) / 2 + (tdx / tdist) * MEETING_OFFSET,
-            y: (fromDesk.y + tDesk.y) / 2 + 0.06 + (tdy / tdist) * MEETING_OFFSET,
-          });
-        }
-      }
-    }
-
-    return positions;
-  }, [agentPositions, bubbles, deskPosMap]);
-
-  // Subscribe to SSE events
   useEffect(() => {
-    const unsub = subscribeToEvents(
+    const interval = window.setInterval(() => {
+      setClock((current) => ({ now: Date.now(), frame: current.frame + 1 }));
+    }, 120);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  // ── Work session cleanup ────────────────────────────────────────────────
+
+  useEffect(() => {
+    setAgentWorkSessions((current) => {
+      let changed = false;
+      const next: Record<string, AgentWorkSession> = {};
+      Object.entries(current).forEach(([agentId, session]) => {
+        if (session.completedAt && Date.now() - session.completedAt > AGENT_SESSION_RELEASE_MS) {
+          changed = true;
+          return;
+        }
+        next[agentId] = session;
+      });
+      return changed ? next : current;
+    });
+  }, [clock.now]);
+
+  // ── SSE subscription ───────────────────────────────────────────────────
+
+  useEffect(() => {
+    const latestOpenRootId = () => {
+      for (let index = openRootOrderRef.current.length - 1; index >= 0; index -= 1) {
+        const messageId = openRootOrderRef.current[index];
+        const session = rootSessionsRef.current.get(messageId);
+        if (session && !session.completedAt) return messageId;
+      }
+      return null;
+    };
+
+    const attachAgentToLatestRoot = (agentId: string, timestamp: number) => {
+      const rootMessageId = latestOpenRootId();
+      if (!rootMessageId) return;
+
+      const rootSession = rootSessionsRef.current.get(rootMessageId);
+      if (!rootSession) return;
+
+      rootSession.agentIds.add(agentId);
+      setAgentWorkSessions((current) => {
+        const existing = current[agentId];
+        if (existing && existing.rootMessageId === rootMessageId && !existing.completedAt) {
+          return current;
+        }
+        return {
+          ...current,
+          [agentId]: {
+            rootMessageId,
+            startedAt: existing && !existing.completedAt ? existing.startedAt : timestamp,
+          },
+        };
+      });
+    };
+
+    const unsubscribe = subscribeToEvents(
       (event: EventData) => {
         setConnected(true);
-        const fp = `${event.type}:${event.timestamp}:${(event as Record<string, unknown>).messageId ?? ""}:${(event as Record<string, unknown>).agentId ?? ""}`;
-        if (seenRef.current.has(fp)) return;
-        seenRef.current.add(fp);
+        const fingerprint = `${event.type}:${event.timestamp}:${(event as Record<string, unknown>).messageId ?? ""}:${(event as Record<string, unknown>).agentId ?? ""}`;
+        if (seenRef.current.has(fingerprint)) return;
+        seenRef.current.add(fingerprint);
         if (seenRef.current.size > 500) {
           const entries = [...seenRef.current];
           seenRef.current = new Set(entries.slice(entries.length - 300));
         }
 
-        const e = event as Record<string, unknown>;
-        const agentId = e.agentId ? String(e.agentId) : undefined;
+        const payload = event as Record<string, unknown>;
+        const agentId = payload.agentId ? String(payload.agentId) : undefined;
 
-        // User sent a message
         if (event.type === "message_enqueued") {
-          const msg = (e.message as string) || "";
-          const sender = (e.sender as string) || "User";
-          if (msg) {
-            const targets = extractTargets(msg);
-            const bubble: SpeechBubble = {
-              id: `${event.timestamp}-${Math.random().toString(36).slice(2, 6)}`,
-              agentId: `_user_${sender}`,
-              message: msg,
-              timestamp: event.timestamp,
-              targetAgents: targets,
-            };
-            setBubbles((prev) => [...prev, bubble].slice(-50));
+          const message = (payload.message as string) || "";
+          const sender = (payload.sender as string) || "User";
+          const messageId = payload.messageId ? String(payload.messageId) : undefined;
+          if (!message) return;
+
+          if (messageId) {
+            rootSessionsRef.current.set(messageId, {
+              startedAt: event.timestamp,
+              agentIds: new Set<string>(),
+            });
+            openRootOrderRef.current = [...openRootOrderRef.current.filter((id) => id !== messageId), messageId];
           }
+
+          setBubbles((current) =>
+            [
+              ...current,
+              {
+                id: `${event.timestamp}-${Math.random().toString(36).slice(2, 7)}`,
+                agentId: `_user_${sender}`,
+                message,
+                timestamp: event.timestamp,
+                targetAgents: extractTargets(message),
+              },
+            ].slice(-80),
+          );
         }
 
-        // Agent/team final response
+        if (event.type === "chain_step_start" && agentId) {
+          attachAgentToLatestRoot(agentId, event.timestamp);
+        }
+
+        if (event.type === "chain_handoff") {
+          const toAgent = payload.toAgent ? String(payload.toAgent) : undefined;
+          const fromAgent = payload.fromAgent ? String(payload.fromAgent) : undefined;
+          if (fromAgent) attachAgentToLatestRoot(fromAgent, event.timestamp);
+          if (toAgent) attachAgentToLatestRoot(toAgent, event.timestamp);
+        }
+
+        if (event.type === "agent_message" && agentId) {
+          attachAgentToLatestRoot(agentId, event.timestamp);
+          const message = (payload.content as string) || "";
+          if (!message) return;
+          setBubbles((current) =>
+            [
+              ...current,
+              {
+                id: `${event.timestamp}-${Math.random().toString(36).slice(2, 7)}`,
+                agentId,
+                message,
+                timestamp: event.timestamp,
+                targetAgents: extractTargets(message),
+              },
+            ].slice(-80),
+          );
+        }
+
         if (event.type === "response_ready") {
-          const msg = (e.responseText as string) || "";
-          if (msg && agentId) {
-            const targets = extractTargets(msg);
-            const bubble: SpeechBubble = {
-              id: `${event.timestamp}-${Math.random().toString(36).slice(2, 6)}`,
-              agentId,
-              message: msg,
-              timestamp: event.timestamp,
-              targetAgents: targets,
-            };
-            setBubbles((prev) => [...prev, bubble].slice(-50));
-          }
+          const messageId = payload.messageId ? String(payload.messageId) : undefined;
+          if (!messageId) return;
+          const rootSession = rootSessionsRef.current.get(messageId);
+          if (!rootSession) return;
+
+          rootSession.completedAt = event.timestamp;
+          openRootOrderRef.current = openRootOrderRef.current.filter((id) => id !== messageId);
+
+          setAgentWorkSessions((current) => {
+            const next = { ...current };
+            rootSession.agentIds.forEach((sessionAgentId) => {
+              const existing = next[sessionAgentId];
+              if (!existing || existing.rootMessageId !== messageId) return;
+              next[sessionAgentId] = { ...existing, completedAt: event.timestamp };
+            });
+            return next;
+          });
         }
       },
-      () => setConnected(false)
+      () => setConnected(false),
     );
-    return unsub;
+
+    return unsubscribe;
   }, []);
 
-  // Auto-expire old bubbles after 15s
+  // ── Bubble expiry ──────────────────────────────────────────────────────
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      const cutoff = Date.now() - 15000;
-      setBubbles((prev) => prev.filter((b) => b.timestamp > cutoff));
+    const interval = window.setInterval(() => {
+      const cutoff = Date.now() - 180000;
+      setBubbles((current) => current.filter((bubble) => bubble.timestamp > cutoff));
     }, 2000);
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, []);
 
-  const handleSend = useCallback(async () => {
-    if (!chatInput.trim() || sending) return;
-    setSending(true);
-    try {
-      await sendMessage({ message: chatInput, sender: "Web", channel: "web" });
-      setChatInput("");
-    } catch {
-      // errors surface via SSE events
-    } finally {
-      setSending(false);
-    }
-  }, [chatInput, sending]);
+  // ── Scene data computation ─────────────────────────────────────────────
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSend();
+  const teamGroups = useMemo(() => buildTeamGroups(agents, teams), [agents, teams]);
+  const agentEntries = useMemo(() => (agents ? Object.entries(agents) : []), [agents]);
+
+  const loungeModel = useMemo<SceneLounge>(
+    () => ({
+      label: "Agent Lounge",
+      agentCount: agentEntries.length,
+      teamCount: teamGroups.length,
+    }),
+    [agentEntries.length, teamGroups.length],
+  );
+
+  const homePositions = useMemo(() => {
+    const positions = new Map<string, { x: number; y: number; color: string; groupLabel: string }>();
+    const orderedAgents = teamGroups.flatMap((group) => group.memberIds.map((agentId) => ({ agentId, group })));
+    orderedAgents.forEach(({ agentId, group }, memberIndex) => {
+        positions.set(agentId, {
+          ...getLoungeMemberSpot(memberIndex, orderedAgents.length),
+          color: group.color,
+          groupLabel: group.label,
+        });
+    });
+    return positions;
+  }, [teamGroups]);
+
+  const latestUserBubble = useMemo(
+    () => [...bubbles].reverse().find((bubble) => bubble.agentId.startsWith("_user_")),
+    [bubbles],
+  );
+
+  const latestAgentBubbleById = useMemo(() => {
+    const lookup = new Map<string, LiveBubble>();
+    bubbles.forEach((bubble) => {
+      if (bubble.agentId.startsWith("_user_")) return;
+      const existing = lookup.get(bubble.agentId);
+      if (!existing || existing.timestamp < bubble.timestamp) lookup.set(bubble.agentId, bubble);
+    });
+    return lookup;
+  }, [bubbles]);
+
+  const latestRelevantBubbleByAgent = useMemo(() => {
+    const lookup = new Map<string, LiveBubble>();
+    bubbles.forEach((bubble) => {
+      const relatedAgentIds = new Set<string>();
+      if (!bubble.agentId.startsWith("_user_")) relatedAgentIds.add(bubble.agentId);
+      bubble.targetAgents.forEach((agentId) => relatedAgentIds.add(agentId));
+
+      relatedAgentIds.forEach((agentId) => {
+        const existing = lookup.get(agentId);
+        if (!existing || existing.timestamp < bubble.timestamp) {
+          lookup.set(agentId, bubble);
+        }
+      });
+    });
+    return lookup;
+  }, [bubbles]);
+
+  const latestResponseByAgent = useMemo(() => {
+    const lookup = new Map<string, ResponseData>();
+    (responses ?? []).forEach((response) => {
+      if (!response.agent) return;
+      const existing = lookup.get(response.agent);
+      if (!existing || existing.timestamp < response.timestamp) {
+        lookup.set(response.agent, response);
+      }
+    });
+    return lookup;
+  }, [responses]);
+
+  const activeTasks = useMemo(() => {
+    const allTasks = tasks ?? [];
+    return allTasks
+      .filter((task) => task.status === "in_progress" || task.status === "review")
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+  }, [tasks]);
+
+  const taskStations = useMemo<SceneTaskStation[]>(() => {
+    const stations = agentEntries.map(([agentId, agent]) => {
+      const directTask = activeTasks.find(
+        (task) => task.assigneeType === "agent" && task.assignee === agentId,
+      );
+      const teamTask = activeTasks.find((task) => {
+        if (task.assigneeType !== "team" || !task.assignee) return false;
+        const team = teams?.[task.assignee];
+        return Boolean(team?.agents.includes(agentId));
+      });
+      const activeTask = directTask ?? teamTask;
+      const recentRouteBubble = [...bubbles]
+        .filter(
+          (bubble) =>
+            clock.now - bubble.timestamp < 120000 &&
+            (bubble.agentId === agentId || bubble.targetAgents.includes(agentId)),
+        )
+        .sort((left, right) => right.timestamp - left.timestamp)[0];
+
+      if (activeTask) {
+        return {
+          id: `desk-${agentId}`,
+          label: agent.name,
+          subtitle: trimText(activeTask.title, 42),
+          status: taskTone(activeTask),
+          kind: "task" as const,
+        };
+      }
+
+      if (recentRouteBubble) {
+        return {
+          id: `desk-${agentId}`,
+          label: agent.name,
+          subtitle: trimText(recentRouteBubble.message, 42),
+          status: routeTone(recentRouteBubble.message),
+          kind: "route" as const,
+        };
+      }
+
+      return {
+        id: `desk-${agentId}`,
+        label: agent.name,
+        subtitle: `@${agentId} waiting in lounge`,
+        status: "empty" as const,
+        kind: "task" as const,
+      };
+    });
+    const renderedStationCount = Math.max(OFFICE_STATION_COUNT, stations.length);
+    for (let index = stations.length; index < renderedStationCount; index += 1) {
+      stations.push({
+        id: `desk-empty-${index}`,
+        label: `Open Desk ${index + 1}`,
+        subtitle: "vacant workstation",
+        status: "empty",
+        kind: "task",
+      });
     }
-  };
+    return stations;
+  }, [activeTasks, agentEntries, bubbles, clock.now, teams]);
+
+  const stationAssignments = useMemo(() => {
+    const assignments = new Map<string, StationAssignment>();
+
+    activeTasks.forEach((task, stationIndex) => {
+      let assignedAgentIds: string[] = [];
+      if (task.assigneeType === "team" && task.assignee) {
+        const team = teams?.[task.assignee];
+        assignedAgentIds = team ? team.agents.filter((agentId) => agents?.[agentId]).slice(0, 3) : [];
+        if (team?.leader_agent && assignedAgentIds.includes(team.leader_agent)) {
+          assignedAgentIds = [team.leader_agent, ...assignedAgentIds.filter((agentId) => agentId !== team.leader_agent)];
+        }
+      } else if (task.assigneeType === "agent" && task.assignee && agents?.[task.assignee]) {
+        assignedAgentIds = [task.assignee];
+      }
+
+      assignedAgentIds.forEach((agentId, memberIndex) => {
+        if (!assignments.has(agentId)) {
+          const agentDeskIndex = agentEntries.findIndex(([id]) => id === agentId);
+          assignments.set(agentId, {
+            stationIndex: agentDeskIndex >= 0 ? agentDeskIndex : stationIndex,
+            kind: "task",
+            status: taskTone(task),
+            startAt: task.updatedAt,
+            responseAt:
+              latestResponseByAgent.get(agentId) && latestResponseByAgent.get(agentId)!.timestamp >= task.updatedAt
+                ? latestResponseByAgent.get(agentId)!.timestamp
+                : undefined,
+            label: task.title,
+            speaker: memberIndex === 0,
+          });
+        }
+      });
+    });
+
+    agentEntries.forEach(([agentId], index) => {
+      if (assignments.has(agentId)) return;
+
+      const session = agentWorkSessions[agentId];
+      if (!session) return;
+      if (session.completedAt && clock.now - session.completedAt > AGENT_SESSION_RELEASE_MS) return;
+      const relevantBubble = latestRelevantBubbleByAgent.get(agentId);
+
+      assignments.set(agentId, {
+        stationIndex: index,
+        kind: "route",
+        status: routeTone(relevantBubble?.message ?? "working"),
+        startAt: session.startedAt,
+        responseAt: session.completedAt,
+        label: trimText(relevantBubble?.message ?? "working", 30),
+        speaker: true,
+      });
+    });
+
+    return assignments;
+  }, [activeTasks, latestRelevantBubbleByAgent, latestResponseByAgent, clock.now, agents, teams, agentEntries, agentWorkSessions]);
+
+  const sceneAgents = useMemo<SceneAgent[]>(() => {
+    return agentEntries.map(([agentId], index) => {
+      const home = homePositions.get(agentId) ?? {
+        x: 100 + index * 40,
+        y: 620,
+        color: AGENT_COLORS[index % AGENT_COLORS.length],
+        groupLabel: "Independent",
+      };
+      const assignment = stationAssignments.get(agentId);
+      const latestBubble = latestAgentBubbleById.get(agentId);
+      const errorActive = latestBubble && clock.now - latestBubble.timestamp < 8000 && isErrorMessage(latestBubble.message);
+
+      let target = { x: home.x, y: home.y };
+      let anim: SceneAgent["anim"] = index % 2 === 0 ? "idle" : "sleep";
+
+      if (assignment) {
+        const stationSpot = getTaskStationMemberSpot(
+          assignment.stationIndex,
+          Math.max(1, taskStations.length),
+          0,
+          1,
+        );
+        if (assignment.kind === "route") {
+          if (!assignment.responseAt) {
+            const age = clock.now - assignment.startAt;
+            const arriveProgress = clamp(age / 1200, 0, 1);
+            target = interpolatePoint(home, stationSpot, easeInOut(arriveProgress));
+            anim = age < 1200 ? "walk" : assignment.speaker ? "type" : "idle";
+          } else {
+            const replyAge = clock.now - assignment.responseAt;
+            const holdDuration = 5000;
+            if (replyAge < holdDuration) {
+              target = stationSpot;
+              anim = "idle";
+            } else {
+              const returnProgress = clamp((replyAge - holdDuration) / 1200, 0, 1);
+              target = interpolatePoint(stationSpot, home, easeInOut(returnProgress));
+              anim = returnProgress < 1 ? "walk" : index % 2 === 0 ? "idle" : "sleep";
+            }
+          }
+        } else {
+          target = stationSpot;
+          if (assignment.responseAt) {
+            const replyAge = clock.now - assignment.responseAt;
+            const holdDuration = 5000;
+            if (replyAge < holdDuration) {
+              target = stationSpot;
+              anim = "idle";
+            } else {
+              const returnProgress = clamp((replyAge - holdDuration) / 1200, 0, 1);
+              target = interpolatePoint(stationSpot, home, easeInOut(returnProgress));
+              anim = returnProgress < 1 ? "walk" : index % 2 === 0 ? "idle" : "sleep";
+            }
+          } else {
+            anim = assignment.status === "pending" ? "idle" : assignment.speaker ? "type" : "idle";
+          }
+        }
+      }
+
+      if (errorActive) {
+        anim = "error";
+      }
+
+      return {
+        id: agentId,
+        label: agentId,
+        color: home.color,
+        x: target.x,
+        y: target.y,
+        anim,
+        flip: target.x < home.x,
+      };
+    });
+  }, [agentEntries, clock.now, homePositions, latestAgentBubbleById, stationAssignments, taskStations.length]);
+
+  const taskSummaries = useMemo<SceneTaskSummary[]>(() => {
+    const allTasks = tasks ?? [];
+    return [
+      { label: "backlog", count: allTasks.filter((task) => task.status === "backlog").length, tone: "empty" },
+      { label: "active", count: allTasks.filter((task) => task.status === "in_progress").length, tone: "running" },
+      { label: "review", count: allTasks.filter((task) => task.status === "review").length, tone: "pending" },
+      { label: "done", count: allTasks.filter((task) => task.status === "done").length, tone: "done" },
+    ];
+  }, [tasks]);
+
+  const queueSnapshot = useMemo<SceneQueueSnapshot>(
+    () => ({
+      incoming: queueStatus?.incoming ?? 0,
+      processing: queueStatus?.processing ?? 0,
+      outgoing: queueStatus?.outgoing ?? 0,
+      activeConversations: queueStatus?.activeConversations ?? 0,
+    }),
+    [queueStatus],
+  );
+
+  const responseItems = useMemo<SceneResponseItem[]>(
+    () =>
+      (responses ?? []).map((response) => ({
+        id: response.messageId,
+        label: trimText(response.message, 40),
+        subtitle: responseSubtitle(response),
+        tone: responseTone(response),
+      })),
+    [responses],
+  );
+
+  const routeRoot = latestUserBubble
+    ? trimText(latestUserBubble.message, 20)
+    : activeTasks[0]
+      ? trimText(activeTasks[0].title, 20)
+      : "no active route";
+
+  const routeTargets = useMemo<SceneRouteTarget[]>(() => {
+    if (latestUserBubble) {
+      return latestUserBubble.targetAgents
+        .slice(0, 3)
+        .map((agentId) => {
+          const agent = sceneAgents.find((entry) => entry.id === agentId);
+          return {
+            label: agentId,
+            color: agent?.color ?? AGENT_COLORS[0],
+            state: stationAssignments.get(agentId)?.status ?? "pending",
+          };
+        });
+    }
+
+    return activeTasks
+      .slice(0, 3)
+      .map((task) => ({
+        label: task.assignee || "unassigned",
+        color: AGENT_COLORS[0],
+        state: taskTone(task),
+      }));
+  }, [activeTasks, latestUserBubble, sceneAgents, stationAssignments]);
+
+  const bossRoomModel = useMemo<SceneBossRoom>(
+    () => ({
+      label: "Boss Room",
+      subtitle: "the human issues commands from here",
+      commandText: latestUserBubble ? trimText(latestUserBubble.message, 42) : "Message @agent or @team to dispatch work",
+      commandTargets: latestUserBubble?.targetAgents.slice(0, 3) ?? [],
+      connected,
+    }),
+    [connected, latestUserBubble],
+  );
+
+  const archiveRoomModel = useMemo<SceneArchiveRoom>(() => ({ label: "Archives" }), []);
+
+  const overlayBubbles = useMemo<OverlayBubble[]>(() => {
+    const items: OverlayBubble[] = [];
+
+    if (latestUserBubble && clock.now - latestUserBubble.timestamp < 10000) {
+      items.push({
+        id: latestUserBubble.id,
+        x: PIXEL_SCENE_LAYOUT.bossRoomX + PIXEL_SCENE_LAYOUT.bossRoomWidth / 2,
+        y: PIXEL_SCENE_LAYOUT.bossRoomY + PIXEL_SCENE_LAYOUT.bossRoomHeight - 6,
+        color: "#84cc16",
+        heading: "boss command",
+        message: trimText(latestUserBubble.message, 220),
+      });
+    }
+
+    latestAgentBubbleById.forEach((bubble, agentId) => {
+      if (clock.now - bubble.timestamp > 9000) return;
+      const agent = sceneAgents.find((entry) => entry.id === agentId);
+      if (!agent) return;
+      items.push({
+        id: bubble.id,
+        x: agent.x,
+        y: agent.y - 82,
+        color: agent.color,
+        heading: "agent update",
+        message: trimText(bubble.message, 220),
+      });
+    });
+
+    return items;
+  }, [clock.now, latestAgentBubbleById, latestUserBubble, sceneAgents]);
+
+  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div className="flex h-full flex-col">
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-6 py-2 border-b">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-xs">
-            {agentEntries.length} agent{agentEntries.length !== 1 ? "s" : ""}
-          </Badge>
-          {teamEntries.length > 0 && (
-            <Badge variant="outline" className="text-xs">
-              {teamEntries.length} team{teamEntries.length !== 1 ? "s" : ""}
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div
-            className={`h-1.5 w-1.5 ${connected ? "bg-primary animate-pulse-dot" : "bg-destructive"}`}
+      <div className="flex-1 overflow-hidden bg-[#3b3a37] p-3">
+        <div className="relative size-full overflow-hidden border border-[#725844] bg-[linear-gradient(180deg,#ccb294,#b89b7d)] shadow-[0_22px_60px_rgba(28,18,12,0.32)]">
+          <PixelOfficeScene
+            frame={clock.frame}
+            bossRoom={bossRoomModel}
+            archiveRoom={archiveRoomModel}
+            lounge={loungeModel}
+            taskStations={taskStations}
+            agents={sceneAgents}
           />
-          <span className="text-[10px] text-muted-foreground">
-            {connected ? "Live" : "Disconnected"}
-          </span>
-        </div>
-      </div>
 
-      {/* Office Scene */}
-      <div className="flex-1 overflow-hidden relative">
-        <div className="absolute inset-0">
-          {/* Floor tiles */}
           <div
-            className="absolute inset-0"
+            className="absolute z-[90] grid grid-cols-2 gap-1.5"
             style={{
-              backgroundImage: "url(/assets/office/floor_tile.png)",
-              backgroundSize: "40px 40px",
-              backgroundRepeat: "repeat",
-              imageRendering: "pixelated",
+              left: `${((PIXEL_SCENE_LAYOUT.archiveRoomX + 36) / PIXEL_SCENE_LAYOUT.width) * 100}%`,
+              top: `${((PIXEL_SCENE_LAYOUT.archiveRoomY + 36) / PIXEL_SCENE_LAYOUT.height) * 100}%`,
+              width: `${(152 / PIXEL_SCENE_LAYOUT.width) * 100}%`,
             }}
-          />
-
-          {/* Desk clusters (always at desk positions) */}
-          {agentPositions.map(({ id, deskPos }) => (
-            <div
-              key={`desk-${id}`}
-              className="absolute"
-              style={{
-                left: `${deskPos.x * 100}%`,
-                top: `${deskPos.y * 100}%`,
-                transform: "translate(-50%, -50%)",
-              }}
-            >
-              <img
-                src="/assets/office/desk.png"
-                alt=""
-                className="w-[72px] h-[40px]"
-                style={{ imageRendering: "pixelated" }}
-                draggable={false}
-              />
-              <img
-                src="/assets/office/monitor.png"
-                alt=""
-                className="absolute w-[28px] h-auto"
-                style={{
-                  top: "-14px",
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  imageRendering: "pixelated",
-                }}
-                draggable={false}
-              />
-              <img
-                src="/assets/office/chair.png"
-                alt=""
-                className="absolute w-[24px] h-auto"
-                style={{
-                  bottom: "-22px",
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  imageRendering: "pixelated",
-                }}
-                draggable={false}
-              />
-            </div>
-          ))}
-
-          {/* Decorative plants */}
-          {[
-            { x: 0.05, y: 0.06 },
-            { x: 0.95, y: 0.06 },
-            { x: 0.05, y: 0.9 },
-            { x: 0.95, y: 0.9 },
-            { x: 0.55, y: 0.5 },
-          ].map((pos, i) => (
-            <img
-              key={`plant-${i}`}
-              src="/assets/office/plant.png"
-              alt=""
-              className="absolute w-[36px] h-auto"
-              style={{
-                left: `${pos.x * 100}%`,
-                top: `${pos.y * 100}%`,
-                transform: "translate(-50%, -50%)",
-                imageRendering: "pixelated",
-              }}
-              draggable={false}
-            />
-          ))}
-
-          {/* Agent characters - positions animate via CSS transition */}
-          {agentPositions.map(({ id, agent, sprite }) => {
-            const pos = agentRenderPositions.get(id) ?? {
-              x: 0.5,
-              y: 0.5,
-            };
-            const activeBubble = bubbles
-              .filter((b) => b.agentId === id)
-              .slice(-1)[0];
-
-            return (
-              <div
-                key={`agent-${id}`}
-                className="absolute"
-                style={{
-                  left: `${pos.x * 100}%`,
-                  top: `${pos.y * 100}%`,
-                  transform: "translate(-50%, -50%)",
-                  zIndex: Math.floor(pos.y * 100) + 10,
-                  transition: "left 0.8s ease-in-out, top 0.8s ease-in-out",
-                }}
-              >
-                {/* Speech bubble */}
-                {activeBubble && (
-                  <SpeechBubbleEl bubble={activeBubble} />
-                )}
-
-                {/* Character sprite */}
-                <img
-                  src={sprite}
-                  alt={agent.name}
-                  className="w-[36px] h-auto mx-auto"
-                  style={{ imageRendering: "pixelated" }}
-                  draggable={false}
-                />
-
-                {/* Agent name label */}
-                <div className="text-[9px] text-center font-bold text-foreground mt-0.5 bg-background/80 px-1.5 py-0.5 whitespace-nowrap">
-                  @{id}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* User avatar in bottom-left */}
-          {bubbles.some((b) => b.agentId.startsWith("_user_")) && (
-            <div
-              className="absolute"
-              style={{ left: "8%", bottom: "8%", zIndex: 50 }}
-            >
-              {(() => {
-                const userBubble = bubbles
-                  .filter((b) => b.agentId.startsWith("_user_"))
-                  .slice(-1)[0];
-                return userBubble ? (
-                  <>
-                    <div className="relative mb-1 max-w-[360px] bg-primary text-primary-foreground text-[11px] px-3 py-2 rounded-sm animate-slide-up shadow-md">
-                      <p className="line-clamp-4 break-words">{userBubble.message}</p>
-                      <div className="absolute -bottom-1 left-4 w-2 h-2 bg-primary rotate-45" />
-                    </div>
-                    <img
-                      src="/assets/office/char_player.png"
-                      alt="User"
-                      className="w-[36px] h-auto mx-auto"
-                      style={{ imageRendering: "pixelated" }}
-                      draggable={false}
-                    />
-                    <div className="text-[9px] text-center font-bold text-foreground mt-0.5 bg-background/80 px-1.5 py-0.5">
-                      You
-                    </div>
-                  </>
-                ) : null;
-              })()}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Composer */}
-      <div className="border-t px-4 py-2 shrink-0">
-        <div className="flex gap-2 items-center">
-          <input
-            type="text"
-            value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Message @agent or @team..."
-            className="flex-1 bg-transparent text-sm border border-border rounded-sm px-3 py-1.5 focus:outline-none focus:border-primary"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!chatInput.trim() || sending}
-            className="h-8 w-8 shrink-0 flex items-center justify-center text-muted-foreground hover:text-primary disabled:opacity-30"
           >
-            {sending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Send className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+            {ARCHIVE_BUTTONS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setArchivePanel((current) => (current === item.id ? null : item.id))}
+                className={`flex h-[28px] w-full items-center justify-center border px-2 py-1 text-center font-mono text-[10px] leading-none shadow-[0_1px_0_rgba(255,255,255,0.06)_inset] transition ${
+                  archivePanel === item.id
+                    ? "border-[#465e14] bg-[#111111] text-[#a3e635]"
+                    : "border-[#885c47] bg-[#dcc3a3] text-[#5c4637] hover:border-[#465e14] hover:bg-[#111111] hover:text-[#a3e635]"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
 
-function SpeechBubbleEl({ bubble }: { bubble: SpeechBubble }) {
-  const segments = parseMessage(bubble.message);
-
-  return (
-    <div
-      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 animate-slide-up"
-      style={{ zIndex: 100 }}
-    >
-      <div className="relative max-w-[400px] min-w-[120px] bg-card border border-border text-[11px] leading-relaxed px-3 py-2 rounded-sm shadow-md">
-        <div className="break-words text-foreground space-y-1">
-          {segments.map((seg, i) =>
-            seg.type === "mention" ? (
-              <div key={i}>
-                <span className="font-bold text-primary">@{seg.agent}</span>
-                <span className="text-muted-foreground">: </span>
-                <span>{seg.text.length > 150 ? seg.text.slice(0, 150) + "..." : seg.text}</span>
-              </div>
-            ) : (
-              <span key={i}>
-                {seg.text.length > 200 ? seg.text.slice(0, 200) + "..." : seg.text}
-              </span>
-            )
+          {archivePanel && (
+            <ArchivePanel
+              panel={archivePanel}
+              onClose={() => setArchivePanel(null)}
+              logs={logs}
+              settings={settings}
+              agentEntries={agentEntries}
+              taskSummaries={taskSummaries}
+              responseItems={responseItems}
+              routeRoot={routeRoot}
+              routeTargets={routeTargets}
+            />
           )}
+
+          <ConversationPanel
+            agents={agents}
+            agentEntries={agentEntries}
+            agentHistories={agentHistories}
+            bubbles={bubbles}
+          />
+
+          <OverlayBubbles bubbles={overlayBubbles} />
         </div>
-        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-card border-b border-r border-border rotate-45" />
       </div>
     </div>
   );
 }
-
