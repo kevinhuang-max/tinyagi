@@ -261,7 +261,7 @@ function formatDuration(ms: number): string {
 
 function AgentSessionRow({ msg, onKill }: { msg: ProcessingMessage; onKill: () => Promise<void> }) {
   const [killing, setKilling] = useState(false);
-  const isQueued = !msg.processAlive && msg.duration < 60_000;
+  const isStale = msg.status === "processing" && !msg.processAlive;
 
   return (
     <div className="flex items-center justify-between border-b border-border/50 pb-3 last:border-0 last:pb-0">
@@ -272,12 +272,12 @@ function AgentSessionRow({ msg, onKill }: { msg: ProcessingMessage; onKill: () =
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="text-sm font-medium">@{msg.agent}</p>
-            {msg.processAlive ? (
-              <Badge variant="default" className="bg-green-600 text-xs">processing</Badge>
-            ) : isQueued ? (
-              <Badge variant="secondary" className="text-xs">queued</Badge>
-            ) : (
+            {isStale ? (
               <Badge variant="destructive" className="text-xs">stale</Badge>
+            ) : msg.status === "processing" ? (
+              <Badge variant="default" className="bg-green-600 text-xs">processing</Badge>
+            ) : (
+              <Badge variant="secondary" className="text-xs">queued</Badge>
             )}
           </div>
           <p className="text-xs text-muted-foreground truncate">{msg.message}</p>

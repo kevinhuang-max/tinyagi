@@ -151,6 +151,7 @@ export function createQueueRoutes() {
                 sender: m.sender,
                 message: m.message,
                 agent,
+                status: m.status as 'queued' | 'processing',
                 processAlive: activeAgents.has(agent),
                 startedAt: m.updated_at,
                 duration: Date.now() - m.updated_at,

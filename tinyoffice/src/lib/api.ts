@@ -100,6 +100,7 @@ export interface ProcessingMessage {
   sender: string;
   message: string;
   agent: string;
+  status: "queued" | "processing";
   processAlive: boolean;
   startedAt: number;
   duration: number;
