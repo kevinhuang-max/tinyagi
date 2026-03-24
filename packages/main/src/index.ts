@@ -13,11 +13,11 @@ import {
     getSettings, getAgents, getTeams, LOG_FILE, FILES_DIR,
     log, emitEvent,
     parseAgentRouting, getAgentResetFlag,
-    invokeAgent,
+    invokeAgent, killAgentProcess,
     loadPlugins, runIncomingHooks,
     streamResponse,
     initQueueDb, getPendingAgents, claimAllPendingMessages,
-    completeMessage, failMessage,
+    markProcessing, completeMessage, failMessage,
     recoverStaleMessages, pruneAckedResponses, pruneCompletedMessages,
     closeQueueDb, queueEvents,
     insertAgentMessage,
@@ -98,6 +98,7 @@ async function processMessage(dbMsg: any): Promise<void> {
     try {
         response = await invokeAgent(agent, agentId, message, workspacePath, shouldReset, agents, teams, (text) => {
             log('INFO', `Agent ${agentId}: ${text}`);
+            insertAgentMessage({ agentId, role: 'assistant', channel, sender: agentId, messageId, content: text });
             emitEvent('agent:progress', { agentId, agentName: agent.name, text, messageId });
         });
     } catch (error) {
@@ -163,12 +164,14 @@ async function processQueue(): Promise<void> {
         if (messages.length === 0) continue;
 
         const currentChain = agentChains.get(agentId) || Promise.resolve();
-        const newChain = currentChain.then(async () => {
+        // .catch() prevents a rejected chain from blocking subsequent messages
+        const newChain = currentChain.catch(() => {}).then(async () => {
             const { messages: groupedMessages, messageIds } = groupChatroomMessages(messages);
             for (let i = 0; i < groupedMessages.length; i++) {
                 const msg = groupedMessages[i];
                 const ids = messageIds[i];
                 try {
+                    for (const id of ids) markProcessing(id);
                     await processMessage(msg);
                     for (const id of ids) {
                         completeMessage(id);
@@ -214,18 +217,29 @@ function logAgentConfig(): void {
 
 initQueueDb();
 
+// Recover any messages left in 'processing' from a previous run — they're
+// guaranteed stale because the process just restarted.
+const startupRecovered = recoverStaleMessages(0);
+if (startupRecovered > 0) {
+    log('INFO', `Startup: recovered ${startupRecovered} in-flight message(s) from previous run`);
+}
+
 const apiServer = startApiServer();
 
 // Event-driven: process queue when a new message arrives
 queueEvents.on('message:enqueued', () => processQueue());
 
+// When user manually kills an agent session, clear its promise chain
+queueEvents.on('agent:killed', ({ agentId }: { agentId: string }) => {
+    agentChains.delete(agentId);
+    log('INFO', `Cleared agent chain for ${agentId}`);
+});
+
 // Also poll periodically in case events are missed
 const pollInterval = setInterval(() => processQueue(), 5000);
 
-// Periodic maintenance
+// Periodic maintenance (prune old completed/acked records)
 const maintenanceInterval = setInterval(() => {
-    const recovered = recoverStaleMessages();
-    if (recovered > 0) log('INFO', `Recovered ${recovered} stale message(s)`);
     pruneAckedResponses();
     pruneCompletedMessages();
 }, 60 * 1000);
