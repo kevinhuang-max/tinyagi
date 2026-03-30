@@ -220,7 +220,12 @@ export function getTaskStationMemberSpot(
 ) {
   const station = getTaskStationRect(stationIndex, totalStations);
   const baseX = station.x + station.width / 2;
-  const baseY = station.y + Math.min(station.height - 8, 122);
+  // Align agent with chair: chair sits near bottom of station area
+  const benchSize = scaledAsset(FURNITURE.cushionedBench, 2.3);
+  const deskSize = scaledAsset(FURNITURE.deskFront);
+  const benchBottom = station.y + station.height - 4;
+  const benchY = benchBottom - benchSize.height;
+  const baseY = benchY + benchSize.height - 4;
   if (memberTotal <= 1) return { x: baseX, y: baseY };
   if (memberTotal === 2) {
     return {
@@ -506,10 +511,12 @@ function DeskStation({
   const area = getTaskStationRect(index, total);
   const deskSize = scaledAsset(FURNITURE.deskFront);
   const benchSize = scaledAsset(FURNITURE.cushionedBench, 2.3);
+  // Position desk so that bench (chair) sits near bottom of station area
+  const benchBottom = area.y + area.height - 4;
+  const benchY = benchBottom - benchSize.height;
+  const deskY = benchY - deskSize.height + 4;
   const deskX = area.x + (area.width - deskSize.width) / 2;
-  const deskY = area.y + 16;
   const benchX = area.x + area.width / 2 - benchSize.width / 2;
-  const benchY = deskY + deskSize.height - 4;
   const monitorX = area.x + area.width / 2 - 16;
   const monitorY = deskY + 10;
 
@@ -714,6 +721,20 @@ export function PixelOfficeScene({
             worldHeight={PIXEL_SCENE_LAYOUT.height}
             onClick={onAgentClick ? () => onAgentClick(agent.id) : undefined}
           />
+          {/* Name tag */}
+          <div
+            className="pointer-events-none absolute flex justify-center"
+            style={{
+              left: toPercent(agent.x - 50, PIXEL_SCENE_LAYOUT.width),
+              top: toPercent(agent.y + 4, PIXEL_SCENE_LAYOUT.height),
+              width: toPercent(100, PIXEL_SCENE_LAYOUT.width),
+              zIndex: Math.max(3, Math.round(agent.y * 10) + 1),
+            }}
+          >
+            <span className="whitespace-nowrap rounded-sm bg-[#241b16]/70 px-1.5 py-0.5 font-mono text-[9px] leading-none text-white/90">
+              {agent.id}
+            </span>
+          </div>
         </div>
       ))}
     </div>
