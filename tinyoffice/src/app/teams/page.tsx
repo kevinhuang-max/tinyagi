@@ -138,7 +138,6 @@ function buildMiniTree(
       source: leaderNodeId,
       target: nodeId,
       type: "smoothstep",
-      pathOptions: { offset: MINI_V_GAP / 2 },
       style: { stroke: "var(--color-border)" },
     });
   });
