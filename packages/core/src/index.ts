@@ -21,5 +21,6 @@ export * from './embeddings';
 export * from './semanticMemory';
 export * from './evals';
 export * from './tracing';
+export * from './structuredOutput';
 export * from './ids';
 export * from './schedules';
