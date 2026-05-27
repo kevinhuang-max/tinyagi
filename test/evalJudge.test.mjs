@@ -228,6 +228,38 @@ assert(fetched.rules.includes('Lead with the point'), 'first rule returned');
 assert(fetched.rules.includes('Never use emdashes'), 'second rule returned');
 assert(!fetched.rules.includes('Inactive rule'), 'inactive rule filtered by query');
 
+console.log('Test 15b: persistent rubricSource in config survives without in-memory provider');
+// Use the same external DB built in Test 15
+defineJudgeConfig('agent-with-persistent-rubric', {
+    enabled: true,
+    rubricSource: {
+        type: 'sqlite',
+        dbPath: extDbPath,
+        query: 'SELECT learning FROM agent_learnings WHERE active = 1',
+    },
+});
+// NB: deliberately NOT calling registerJudgeRubric — only config + rubricSource
+mockJudge(JSON.stringify({
+    violations: [],
+    scores: { ledWithPoint: 8 },
+    notes: 'persistent rubric',
+}));
+const r15b = await runJudgment('agent-with-persistent-rubric', 'response');
+assert(r15b !== null, 'judgment runs using persistent rubricSource (no in-memory provider needed)');
+assert(r15b.passed === true, 'passed with persistent rubric');
+
+console.log('Test 15c: in-memory provider takes precedence over rubricSource when both set');
+const memoryCalls = { count: 0 };
+registerJudgeRubric('agent-with-persistent-rubric', async () => {
+    memoryCalls.count++;
+    return { rules: ['in-memory rule that the external DB does not have'] };
+});
+mockJudge(JSON.stringify({ violations: [], scores: { x: 7 } }));
+await runJudgment('agent-with-persistent-rubric', 'response');
+assert(memoryCalls.count === 1, 'in-memory provider was called (took precedence)');
+assert(lastJudgeUserPrompt.includes('in-memory rule that the external DB does not have'), 'in-memory rule appeared in prompt');
+unregisterJudgeRubric('agent-with-persistent-rubric');
+
 console.log('Test 16: rubric provider that throws → graceful skip');
 defineJudgeConfig('throwing-agent', { enabled: true });
 registerJudgeRubric('throwing-agent', async () => { throw new Error('rubric source unavailable'); });

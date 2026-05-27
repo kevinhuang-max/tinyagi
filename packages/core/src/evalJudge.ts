@@ -54,6 +54,20 @@ export interface JudgeConfig {
     judgeModel?: string;
     scoringCriteria?: string[];
     maxRules?: number;
+    /**
+     * Optional persistent rubric source. When present, runJudgment will
+     * construct a SQLite-backed rubric provider on demand if no in-memory
+     * provider has been registered via registerJudgeRubric. This lets
+     * judge configs survive daemon restarts without re-running a setup
+     * script. In-memory registration (registerJudgeRubric) still takes
+     * precedence when both are set.
+     */
+    rubricSource?: {
+        type: 'sqlite';
+        dbPath: string;
+        query: string;
+        columnName?: string;
+    };
 }
 
 export interface JudgmentRubric {
@@ -288,9 +302,18 @@ export async function runJudgment(
         const config = getJudgeConfig(agentId);
         if (!config || !config.enabled) return null;
 
-        const provider = rubricProviders.get(agentId);
+        // Resolve a rubric provider: in-memory registration takes precedence,
+        // then fall back to a persistent rubricSource in the config.
+        let provider = rubricProviders.get(agentId);
+        if (!provider && config.rubricSource && config.rubricSource.type === 'sqlite') {
+            provider = createSqliteRubricProvider({
+                dbPath: config.rubricSource.dbPath,
+                query: config.rubricSource.query,
+                columnName: config.rubricSource.columnName,
+            });
+        }
         if (!provider) {
-            log('WARN', `evalJudge: agent=${agentId} has config but no rubric provider registered — skipping`);
+            log('WARN', `evalJudge: agent=${agentId} has config but no rubric provider (in-memory or rubricSource) — skipping`);
             return null;
         }
 
