@@ -34,7 +34,7 @@
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { TINYAGI_HOME } from './config';
+import { TINYAGI_HOME, getSettings } from './config';
 import { log } from './logging';
 import { getAdapter } from './adapters';
 import { withSpan } from './tracing';
@@ -351,6 +351,34 @@ export async function runJudgment(
             return null;
         }
 
+        // Build envOverrides from settings.json so the judge subprocess
+        // gets the same OAuth/API auth that invoke.ts gives regular agent
+        // calls. Without this, the CLI adapter's `claude` subprocess has
+        // no credentials and fails with 401, and the SDK adapter falls
+        // back to (possibly missing) process.env.ANTHROPIC_API_KEY.
+        const envOverrides: Record<string, string> = {};
+        try {
+            const settings = getSettings();
+            const anthropicSettings = settings.models?.anthropic;
+            if (anthropicSettings) {
+                if (adapterKey === 'anthropic-sdk') {
+                    if (anthropicSettings.api_key) {
+                        envOverrides.ANTHROPIC_API_KEY = anthropicSettings.api_key;
+                    }
+                } else if (adapterKey === 'anthropic') {
+                    if (anthropicSettings.oauth_token) {
+                        envOverrides.CLAUDE_CODE_OAUTH_TOKEN = anthropicSettings.oauth_token;
+                        envOverrides.ANTHROPIC_AUTH_TOKEN = '';
+                        envOverrides.ANTHROPIC_API_KEY = '';
+                    } else if (anthropicSettings.api_key) {
+                        envOverrides.ANTHROPIC_API_KEY = anthropicSettings.api_key;
+                    }
+                }
+            }
+        } catch (e) {
+            log('WARN', `evalJudge: getSettings() threw (non-fatal, judge may fail downstream): ${(e as Error).message}`);
+        }
+
         const start = Date.now();
         let judgeText: string;
         try {
@@ -361,7 +389,7 @@ export async function runJudgment(
                 systemPrompt: system,
                 model: judgeModel,
                 shouldReset: true,
-                envOverrides: {},
+                envOverrides,
             });
         } catch (e) {
             log('WARN', `evalJudge: judge adapter call failed for ${agentId}: ${(e as Error).message}`);
