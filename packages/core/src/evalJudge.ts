@@ -41,6 +41,7 @@ import { withSpan } from './tracing';
 
 export const JUDGE_DB_PATH = path.join(TINYAGI_HOME, 'evals.db');
 export const DEFAULT_JUDGE_MODEL = 'claude-haiku-4-5-20251001';
+export const DEFAULT_JUDGE_ADAPTER = 'anthropic-sdk';
 export const DEFAULT_SCORING_CRITERIA = [
     'ledWithPoint',
     'lengthAppropriate',
@@ -52,6 +53,15 @@ export const DEFAULT_MAX_RULES = 30;
 export interface JudgeConfig {
     enabled: boolean;
     judgeModel?: string;
+    /**
+     * Provider key of the adapter to call for judge inference. Defaults
+     * to `anthropic-sdk` (in-process API, fast, requires ANTHROPIC_API_KEY).
+     * Use `anthropic` to route judge calls through the CLI adapter
+     * instead, which works with OAuth / Claude Code subscription auth
+     * at the cost of subprocess-spawn latency. Any registered adapter
+     * key works; getAdapter(adapter) must resolve.
+     */
+    adapter?: string;
     scoringCriteria?: string[];
     maxRules?: number;
     /**
@@ -334,9 +344,10 @@ export async function runJudgment(
 
         const { system, user } = buildJudgePrompt({ agentId, output, rubric, scoringCriteria, maxRules });
 
-        const adapter = getAdapter('anthropic-sdk');
+        const adapterKey = config.adapter || DEFAULT_JUDGE_ADAPTER;
+        const adapter = getAdapter(adapterKey);
         if (!adapter) {
-            log('WARN', 'evalJudge: anthropic-sdk adapter not registered — skipping');
+            log('WARN', `evalJudge: adapter '${adapterKey}' not registered, skipping`);
             return null;
         }
 

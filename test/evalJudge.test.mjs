@@ -274,6 +274,36 @@ mockJudge(JSON.stringify({ violations: [], scores: { x: 5 } }));
 await runJudgment('model-test-agent', 'output');
 assert(lastJudgeModel === 'claude-opus-4-7', `custom judgeModel passed to adapter (got ${lastJudgeModel})`);
 
+console.log('Test 17b: config.adapter routes judge to the configured adapter');
+// Register a fake adapter under a custom provider key and verify the judge uses it
+const { registerAdapter } = await import('../packages/core/dist/index.js');
+let fakeAdapterCalled = false;
+registerAdapter({
+    providers: ['__test-fake-adapter'],
+    async invoke(opts) {
+        fakeAdapterCalled = true;
+        return JSON.stringify({ violations: [], scores: { ledWithPoint: 7 }, notes: 'fake adapter ok' });
+    },
+});
+defineJudgeConfig('fake-adapter-agent', {
+    enabled: true,
+    adapter: '__test-fake-adapter',
+});
+registerJudgeRubric('fake-adapter-agent', async () => ({ rules: ['be terse'] }));
+const r17b = await runJudgment('fake-adapter-agent', 'short reply');
+assert(fakeAdapterCalled === true, 'configured adapter was called instead of default');
+assert(r17b !== null && r17b.passed === true, 'judgment via custom adapter succeeded');
+assert(r17b.notes === 'fake adapter ok', 'notes from custom adapter propagated');
+
+console.log('Test 17c: bad adapter key returns null gracefully');
+defineJudgeConfig('bad-adapter-agent', {
+    enabled: true,
+    adapter: '__does-not-exist',
+});
+registerJudgeRubric('bad-adapter-agent', async () => ({ rules: ['x'] }));
+const r17c = await runJudgment('bad-adapter-agent', 'output');
+assert(r17c === null, 'unknown adapter key returns null (logged WARN)');
+
 console.log('Test 18: deleteJudgeConfig disables the agent');
 defineJudgeConfig('agent-to-delete', { enabled: true });
 registerJudgeRubric('agent-to-delete', async () => ({ rules: ['r'] }));
