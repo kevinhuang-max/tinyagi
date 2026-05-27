@@ -5,6 +5,7 @@ import { log, emitEvent } from './logging';
 import { runOutgoingHooks } from './plugins';
 import { enqueueResponse } from './queues';
 import { runEval } from './evals';
+import { runJudgmentInBackground } from './evalJudge';
 import { withSpan, startSpan, endSpan } from './tracing';
 
 export const LONG_RESPONSE_THRESHOLD = 4000;
@@ -169,6 +170,18 @@ export async function streamResponse(response: string, options: {
             });
         } catch (e) {
             log('WARN', `eval hook threw (non-fatal): ${(e as Error).message}`);
+        }
+
+        // Fire-and-forget LLM-as-judge. No-op when judge is not configured
+        // and enabled for this agent. The judge call runs in the background
+        // (returns immediately); errors and persistence happen async.
+        try {
+            runJudgmentInBackground(options.agentId, hookedResponse, {
+                messageId: options.messageId,
+                channel: options.channel,
+            });
+        } catch (e) {
+            log('WARN', `judge dispatch threw (non-fatal): ${(e as Error).message}`);
         }
 
         log('INFO', `@${options.agentId} responded:\n${finalResponse}`);
