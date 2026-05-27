@@ -219,7 +219,7 @@ export function listRecentTraces(limit: number = 50): TraceSummary[] {
             (SELECT COUNT(*) FROM spans WHERE trace_id = root.trace_id) AS span_count
         FROM spans root
         WHERE root.parent_id IS NULL
-        ORDER BY root.start_time DESC
+        ORDER BY root.start_time DESC, root.rowid DESC
         LIMIT ?
     `).all(limit) as Array<{
         trace_id: string; root_name: string; start_time: number;
