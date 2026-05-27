@@ -17,5 +17,8 @@ export * from './response';
 export * from './agent';
 export * from './queues';
 export * from './memory';
+export * from './embeddings';
+export * from './semanticMemory';
+export * from './evals';
 export * from './ids';
 export * from './schedules';

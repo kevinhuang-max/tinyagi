@@ -12,7 +12,8 @@
     "croner": "^10.0.1",
     "dotenv": "^16.4.0",
     "jsonrepair": "^3.13.2",
-    "nanoid": "^5.1.6"
+    "nanoid": "^5.1.6",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13"
