@@ -5,6 +5,7 @@ import { log, emitEvent } from './logging';
 import { runOutgoingHooks } from './plugins';
 import { enqueueResponse } from './queues';
 import { runEval } from './evals';
+import { withSpan, startSpan, endSpan } from './tracing';
 
 export const LONG_RESPONSE_THRESHOLD = 4000;
 
@@ -119,51 +120,63 @@ export async function streamResponse(response: string, options: {
     agentId: string;
     transform?: (text: string) => string;
 }): Promise<void> {
-    let finalResponse = response.trim();
+    // Whole pipeline traced as one root span when tracing is enabled.
+    // Cheap no-op when disabled. Never throws.
+    return withSpan('response.streamResponse', async () => {
+        let finalResponse = response.trim();
 
-    if (options.transform) {
-        finalResponse = options.transform(finalResponse);
-    }
+        if (options.transform) {
+            finalResponse = options.transform(finalResponse);
+        }
 
-    const outboundFilesSet = new Set<string>();
-    collectFiles(finalResponse, outboundFilesSet);
-    const outboundFiles = Array.from(outboundFilesSet);
-    if (outboundFiles.length > 0) {
-        finalResponse = finalResponse.replace(/\[send_file:\s*[^\]]+\]/g, '').trim();
-    }
+        const outboundFilesSet = new Set<string>();
+        collectFiles(finalResponse, outboundFilesSet);
+        const outboundFiles = Array.from(outboundFilesSet);
+        if (outboundFiles.length > 0) {
+            finalResponse = finalResponse.replace(/\[send_file:\s*[^\]]+\]/g, '').trim();
+        }
 
-    const { text: hookedResponse, metadata } = await runOutgoingHooks(finalResponse, {
-        channel: options.channel, sender: options.sender, messageId: options.messageId, originalMessage: options.originalMessage,
-    });
-    const { message: responseMessage, files: allFiles } = handleLongResponse(
-        hookedResponse,
-        outboundFiles,
-        { agentId: options.agentId, channel: options.channel }
-    );
-
-    enqueueResponse({
-        channel: options.channel,
-        sender: options.sender,
-        senderId: options.senderId,
-        message: responseMessage,
-        originalMessage: options.originalMessage,
-        messageId: options.messageId,
-        agent: options.agentId,
-        files: allFiles.length > 0 ? allFiles : undefined,
-        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    });
-
-    // Non-blocking, post-enqueue eval hook. No-op when no spec is registered
-    // for this agent. Wrapped so eval failures NEVER affect response delivery.
-    try {
-        runEval(options.agentId, hookedResponse, {
-            messageId: options.messageId,
-            channel: options.channel,
+        const hooksSpan = startSpan('response.runOutgoingHooks');
+        const { text: hookedResponse, metadata } = await runOutgoingHooks(finalResponse, {
+            channel: options.channel, sender: options.sender, messageId: options.messageId, originalMessage: options.originalMessage,
         });
-    } catch (e) {
-        log('WARN', `eval hook threw (non-fatal): ${(e as Error).message}`);
-    }
+        endSpan(hooksSpan, 'ok', { hookCount: Object.keys(metadata).length });
 
-    log('INFO', `@${options.agentId} responded:\n${finalResponse}`);
-    emitEvent('message:done', { channel: options.channel, sender: options.sender, agentId: options.agentId, responseLength: finalResponse.length, responseText: finalResponse, messageId: options.messageId });
+        const { message: responseMessage, files: allFiles } = handleLongResponse(
+            hookedResponse,
+            outboundFiles,
+            { agentId: options.agentId, channel: options.channel }
+        );
+
+        enqueueResponse({
+            channel: options.channel,
+            sender: options.sender,
+            senderId: options.senderId,
+            message: responseMessage,
+            originalMessage: options.originalMessage,
+            messageId: options.messageId,
+            agent: options.agentId,
+            files: allFiles.length > 0 ? allFiles : undefined,
+            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        });
+
+        // Non-blocking, post-enqueue eval hook. No-op when no spec is registered
+        // for this agent. Wrapped so eval failures NEVER affect response delivery.
+        try {
+            runEval(options.agentId, hookedResponse, {
+                messageId: options.messageId,
+                channel: options.channel,
+            });
+        } catch (e) {
+            log('WARN', `eval hook threw (non-fatal): ${(e as Error).message}`);
+        }
+
+        log('INFO', `@${options.agentId} responded:\n${finalResponse}`);
+        emitEvent('message:done', { channel: options.channel, sender: options.sender, agentId: options.agentId, responseLength: finalResponse.length, responseText: finalResponse, messageId: options.messageId });
+    }, {
+        agentId: options.agentId,
+        channel: options.channel,
+        messageId: options.messageId,
+        responseChars: response.length,
+    });
 }
