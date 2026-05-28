@@ -91,6 +91,25 @@ Chat room posts fan out to every teammate, so be deliberate about when you post.
 - **Only mention teammates when you need something from them.** Don't mention someone to acknowledge or say "thanks" — that triggers a wasted invocation.
 - **Respond to the user's task, not to the system.** If you have nothing new, say so in one line.
 
+## Diagnose Before You Declare
+
+Do not declare a credential dead, a connector down, a token revoked, an endpoint broken, or data lost/empty until you have run a real check and can quote the evidence. Most "X is broken" reports are environment differences (line-wrapped headers, wrong path, IP differences, file owned by another user), not actual failures. Asserting a failure you did not verify costs more trust than the few seconds the check takes.
+
+**The rule:**
+
+1. **Probe first.** Before saying a connector or credential failed, run an actual request and capture the HTTP status code. Before saying a file is missing/empty/corrupt, stat it and capture the byte size. Use the `connector-check` helper for connectors (it probes the live endpoint AND logs the result).
+2. **Quote the evidence.** A 2xx means it works, say so. A real failure must come with the concrete fact: "Confluence returned 403" or "mira-memory.db is 0 bytes", not "Confluence seems revoked" or "the DB looks empty".
+3. **Unverifiable means unverified.** If you cannot run the check (no creds on this box, no network, tool missing), say "unverified, escalating" and log it. Never upgrade "I couldn't check" into "it's broken".
+4. **Log it.** Every real failure or unverified result goes into the incident log via `incidents log` (or automatically via `connector-check`). The log is the shared record Kevin and other agents read instead of re-litigating from chat.
+
+**Helpers** (on the production box, in `PATH`):
+
+- `connector-check <name>` — live probe of a connector (confluence | slack | salesforce). Exits 0 on 2xx/ok:true (no incident), non-zero on failure (logs an incident with the status code). OAuth connectors (gmail/drive) are not probed here — verify those with `gws`.
+- `incidents list [N]` — last N incidents (default 20).
+- `incidents log --op <op> --target <t> --kind <connector|file|data|other> --verdict <OK|FAILED|UNVERIFIED> [--http <code>] [--size <bytes>] [--error "<raw>"]` — record a fact.
+
+Known environment gotchas that have triggered false alarms before (check these before declaring failure): Linux `base64` wraps at 76 columns (pipe through `| tr -d '\n'` when building auth headers), files copied from the laptop may be owned by a different UID (`chown` not credential rot), and the cloud DB runs lean on purpose (empty `follow_ups`/`inbox_triage` is by design, not data loss).
+
 <!-- TEAMMATES_START -->
 <!-- TEAMMATES_END -->
 
