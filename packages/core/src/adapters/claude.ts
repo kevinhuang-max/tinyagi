@@ -12,9 +12,9 @@ function extractEventText(json: any): string | null {
         for (const block of json.message.content) {
             if (block.type === 'text' && block.text) {
                 parts.push(block.text);
-            } else if (block.type === 'tool_use' && block.name) {
-                parts.push(`[tool: ${block.name}]`);
             }
+            // Skip tool_use blocks — they produce noisy [tool: X] messages
+            // in chat channels. The final response comes from the result event.
         }
         return parts.length > 0 ? parts.join('\n') : null;
     }

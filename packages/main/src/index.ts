@@ -102,6 +102,8 @@ async function processMessage(dbMsg: any): Promise<void> {
             log('INFO', `Agent ${agentId}: ${text}`);
             insertAgentMessage({ agentId, role: 'assistant', channel, sender: agentId, messageId, content: text });
             emitEvent('agent:progress', { agentId, agentName: agent.name, text, messageId });
+            // Skip sending intermediate tool-use-only events to chat channels (noisy)
+            if (/^\[tool: \w+\]$/.test(text.trim())) return;
             sendDirectResponse(text, {
                 channel, sender, senderId: data.senderId,
                 messageId, originalMessage: rawMessage, agentId,
