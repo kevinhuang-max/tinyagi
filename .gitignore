@@ -17,6 +17,12 @@ dist/
 .env
 .env.*
 
+# Ops secrets / runtime ledgers (never commit; live only on the box)
+.connector-creds
+incidents.db
+*.db-wal
+*.db-shm
+
 # OS files
 .DS_Store
 Thumbs.db
