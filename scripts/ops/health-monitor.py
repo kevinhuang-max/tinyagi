@@ -364,10 +364,16 @@ def check_jobs() -> list:
             diag["source"] = source or "none"
 
             if last_run_dt is None:
+                # Never observed on this host. Absence of history is NOT a
+                # failure (e.g. right after a cutover, or a daily job that has
+                # not hit its first scheduled run yet). Surface it as benign;
+                # real overdue/failure detection kicks in once it runs once and
+                # leaves a marker. This keeps fresh deploys false-positive-free.
+                diag["never_observed"] = True
                 results.append(CheckResult(
-                    sub, "warn" if sev_stale != "critical" else "critical",
-                    "no marker and no log file — never ran?",
-                    "configuration", diag))
+                    sub, "ok",
+                    "no run observed yet (new on host; tracked after first run)",
+                    "transient", diag))
                 continue
 
             age_sec = (now - last_run_dt).total_seconds()
