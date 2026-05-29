@@ -586,6 +586,37 @@ def check_backup() -> CheckResult:
 # ---------------------------------------------------------------------------
 # TRIAGE
 # ---------------------------------------------------------------------------
+def check_filesystem() -> CheckResult:
+    # Scheduled jobs resolve paths via Path.home()/tinyagi-workspace, which MUST
+    # be a symlink to the real workspace. If it's missing/broken/wrong, jobs write
+    # to the wrong tree (split-brain). This is the layout the cutover established.
+    link = "/home/tinyagi/tinyagi-workspace"
+    target = "/opt/tinyagi/workspace"
+    diag = {"link": link, "target": target}
+    try:
+        if not os.path.islink(link):
+            is_dir = os.path.isdir(link)
+            return CheckResult(
+                "filesystem", "warn" if is_dir else "critical",
+                f"{link} is {'a real directory (split-brain risk)' if is_dir else 'missing'}, expected symlink -> {target}",
+                "configuration", diag)
+        actual = os.path.realpath(link)
+        diag["resolves_to"] = actual
+        if actual != os.path.realpath(target):
+            return CheckResult("filesystem", "warn",
+                               f"{link} points to {actual}, expected {target}",
+                               "configuration", diag)
+        if not os.path.isdir(os.path.join(link, "assistant", "logs")):
+            return CheckResult("filesystem", "warn",
+                               "workspace logs dir not reachable via symlink",
+                               "configuration", diag)
+        return CheckResult("filesystem", "ok",
+                           f"workspace symlink -> {target} intact", "transient", diag)
+    except Exception as e:
+        return CheckResult("filesystem", "critical", f"fs check error: {e}",
+                           "logic", {"error": str(e)})
+
+
 def classify(res: CheckResult) -> str:
     """Return one of: transient | configuration | dependency | resource | logic."""
     if res.subsystem == "resources":
@@ -687,10 +718,34 @@ def remediate_backup(res: CheckResult):
     return recheck.state == "ok", f"backup re-run; recheck={recheck.state}: {recheck.detail[:150]}"
 
 
+def remediate_filesystem(res: CheckResult):
+    # Recreate the workspace symlink ONLY for missing/broken/wrong-target cases.
+    # If a REAL directory sits there it may hold data — refuse to delete it and
+    # escalate instead (no data loss). Runs as tinyagi (owns /home/tinyagi); no sudo.
+    link = "/home/tinyagi/tinyagi-workspace"
+    target = "/opt/tinyagi/workspace"
+    if not os.path.isdir(target):
+        return False, f"target {target} missing — cannot relink (escalate)"
+    try:
+        if os.path.islink(link):
+            os.remove(link)
+        elif os.path.isdir(link):
+            return False, f"{link} is a real directory — manual review (refusing to delete)"
+        elif os.path.exists(link):
+            os.remove(link)
+        os.symlink(target, link)
+        ok = os.path.islink(link) and os.path.realpath(link) == os.path.realpath(target)
+        return ok, (f"relinked {link} -> {target}" if ok else "relink did not take")
+    except Exception as e:
+        return False, f"relink raised: {e}"
+
+
 # subsystem-pattern -> remediation fn. database & resources deliberately absent.
 def remediation_for(subsystem: str):
     if subsystem == "daemon":
         return remediate_daemon
+    if subsystem == "filesystem":
+        return remediate_filesystem
     if subsystem.startswith("job:"):
         return remediate_job
     if subsystem.startswith("connector:"):
@@ -960,28 +1015,47 @@ def record_actions(conn, subsystem, actions_text):
 # ---------------------------------------------------------------------------
 # Run all checks, each isolated.
 # ---------------------------------------------------------------------------
-def run_all_checks() -> list:
+def run_all_checks(conn) -> list:
+    # Tiered cadence: cheap local checks run every tick (daemon uptime is what
+    # matters and it's free); external API probes are throttled so we don't hammer
+    # Slack/Confluence/Salesforce or the public endpoint every few minutes. A
+    # throttled check that isn't due is simply skipped — its last health_status
+    # row stays visible in `status` and it runs again once its interval elapses.
     results = []
+    now = utcnow()
+
+    def due(gate_subsystem, interval_min):
+        if interval_min <= 0:
+            return True
+        row = conn.execute("SELECT last_checked FROM health_status WHERE subsystem = ?",
+                           (gate_subsystem,)).fetchone()
+        if not row or not row["last_checked"]:
+            return True
+        dt = parse_iso(row["last_checked"])
+        return dt is None or (now - dt).total_seconds() >= interval_min * 60
 
     def safe(name, fn):
         try:
             out = fn()
-            if isinstance(out, list):
-                results.extend(out)
-            else:
-                results.append(out)
+            results.extend(out if isinstance(out, list) else [out])
         except Exception as e:
             results.append(CheckResult(name, "critical",
                                        f"check threw: {e}", "logic",
                                        {"error": str(e)}, hard_fail=True))
 
+    # Always (cheap + local; daemon/db/fs/resources matter for uptime & integrity).
     safe("daemon", check_daemon)
     safe("database", check_database)
+    safe("filesystem", check_filesystem)
     safe("jobs", check_jobs)
-    safe("connectors", check_connectors)
-    safe("endpoints", check_endpoints)
     safe("resources", check_resources)
-    safe("backup", check_backup)
+    # Throttled external probes.
+    if due("connector:slack", 30):
+        safe("connectors", check_connectors)
+    if due("endpoints", 30):
+        safe("endpoints", check_endpoints)
+    if due("backup", 60):
+        safe("backup", check_backup)
     return results
 
 
@@ -991,7 +1065,7 @@ def run_all_checks() -> list:
 def cmd_check(args):
     conn = db_connect()
     init_schema(conn)
-    results = run_all_checks()
+    results = run_all_checks(conn)
 
     n_ok = n_warn = n_crit = 0
     for res in results:
