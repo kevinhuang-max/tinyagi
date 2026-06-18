@@ -129,11 +129,11 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
 
     const cf = czAccount.Cf || {};
     czSignals = {
-      usageFrequency: czAccount.UsageFrequency,
+      // ChurnZero usage fields (page views, active admins, usage frequency, last
+      // activity) are unreliable/unsynced - they read 0 or future dates while the
+      // account has real traffic. Omitted until real usage is wired in from
+      // Tinybird. Keep only CS-process signals here.
       nextRenewalDate: czAccount.NextRenewalDate,
-      pageViews30d: cf.OfPageViewsLast30Days as number | undefined,
-      activeAdmins: cf.ActivePropertyAdmins as number | undefined,
-      lastActivity: cf.LastActivity as string | undefined,
       lastBusinessReview: cf.MostRecentBusinessReview as string | undefined,
       supportNextAction: cf.SupportNextAction as string | undefined,
       cancellationPending: cf.CancellationPending as boolean | undefined,

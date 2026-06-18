@@ -148,7 +148,7 @@ Today is ${today}.
 
 Using ONLY the data below, write three sections for the CSM:
 - "whatsHappening": 2 to 3 sentences on the current state. Lead with the single most important fact (contract timing, score trend, usage drop, open high-priority cases). Use real numbers and dates.
-- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts. Watch for quiet risk: low page views, zero active admins, or a business review long overdue can mean risk even when the at-risk flag is off.
+- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts. Watch for quiet risk in the data provided (an overdue business review, a stalled or near-term renewal, open high-priority cases) even when the at-risk flag is off. Do NOT comment on platform usage, page views, or active admins - that data is not included here, so never claim the account is unused or abandoned.
 - "nextSteps": 2 to 4 specific actions the CSM should take before or on the call. Each must tie to a concrete fact above (a case number, a date, a contract term). No generic advice.
 
 Rules:
