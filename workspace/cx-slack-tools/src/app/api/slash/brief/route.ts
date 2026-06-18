@@ -163,7 +163,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     autoRenew: contractTerms?.auto_renewal ?? null,
     cancellationNoticeDays: contractTerms?.cancellation_notice_days ?? null,
     health: { value: czHealthScore, trend: czTrend },
-    opportunities: opportunities.map(o => ({ name: o.Name, stage: o.StageName, amount: o.Amount, closeDate: o.CloseDate })),
+    opportunities: opportunities.map(o => ({ name: o.Name, stage: o.StageName, amount: o.ARR__c ?? o.Amount, closeDate: o.CloseDate })),
     cases: cases.map(c => ({ number: c.CaseNumber, subject: c.Subject, status: c.Status, priority: c.Priority, createdDate: c.CreatedDate })),
     nps: nps.map(n => ({ score: n.Net_Promoter_Score__c, grouping: n.NPS_Grouping__c, comment: n.Comments__c, date: n.CreatedDate })),
     shoots: shoots.map(s => ({ name: s.Name, stage: s.Shoot_Stage__c, date: s.Shoot_Date__c })),

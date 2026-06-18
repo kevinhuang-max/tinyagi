@@ -91,7 +91,7 @@ function buildPrompt(input: BriefNarrativeInput): string {
   }
   if (input.opportunities.length) {
     d.push('Open opportunities:');
-    for (const o of input.opportunities) d.push(`  - ${o.name}: ${o.stage}${o.amount != null ? ` ($${o.amount.toLocaleString()})` : ''}${o.closeDate ? `, close ${o.closeDate}` : ''}`);
+    for (const o of input.opportunities) d.push(`  - ${o.name}: ${o.stage}${o.amount != null ? ` (ARR ${o.amount.toLocaleString()})` : ''}${o.closeDate ? `, close ${o.closeDate}` : ''}`);
   }
   if (input.cases.length) {
     d.push('Open cases:');
@@ -125,6 +125,7 @@ Using ONLY the data below, write three sections for the CSM:
 
 Rules:
 - ChurnZero score: HIGHER means MORE churn risk. A rising score is getting WORSE; a falling score is improving. Frame trends accordingly.
+- Dollar amounts: quote them EXACTLY as written. Never rescale or add k/M/B suffixes ($759.81 is not $759.8k; $9,117 is not $9.1k).
 - Be direct and concrete. Plain language a normal person would use. No jargon, no consultant-speak, no em dashes.
 - If data is thin, say what is missing instead of inventing.
 
