@@ -20,15 +20,18 @@ export interface BriefNarrativeInput {
   contractEnd: string | null;
   autoRenew: boolean | null;
   cancellationNoticeDays: number | null;
-  health: { value?: number | null; grade?: string | null; trend?: string | null } | null;
+  health: { value?: number | null; trend?: string | null } | null;
   opportunities: Array<{ name: string; stage: string; amount: number | null; closeDate: string | null }>;
   cases: Array<{ number: string; subject: string | null; status: string; priority: string | null; createdDate: string | null }>;
   nps: Array<{ score: number | null; grouping: string | null; comment: string | null; date: string | null }>;
   shoots: Array<{ name: string; stage: string | null; date: string | null }>;
   czSignals: {
-    lastActivity?: string;
+    usageFrequency?: string;
+    nextRenewalDate?: string;
     pageViews30d?: number;
     activeAdmins?: number;
+    lastActivity?: string;
+    lastBusinessReview?: string;
     supportNextAction?: string;
     cancellationPending?: boolean;
   } | null;
@@ -71,15 +74,18 @@ function buildPrompt(input: BriefNarrativeInput): string {
     d.push(`Contract end: ${input.contractEnd}${input.autoRenew === null ? '' : input.autoRenew ? ' (auto-renews)' : ' (NO auto-renew)'}${input.cancellationNoticeDays ? ` | Cancellation notice: ${input.cancellationNoticeDays} days` : ''}`);
   }
   if (input.health && input.health.value != null) {
-    d.push(`ChurnZero score: ${input.health.value}/100${input.health.grade ? ` (grade ${input.health.grade})` : ''}${input.health.trend ? `, trend ${input.health.trend}` : ''}`);
+    d.push(`ChurnZero score: ${input.health.value}/100${input.health.trend ? `, trend ${input.health.trend}` : ''} (HIGHER = MORE risk)`);
   }
   if (input.czSignals) {
     const s = input.czSignals;
     const sig: string[] = [];
+    if (s.usageFrequency) sig.push(`usage frequency ${s.usageFrequency}`);
+    if (s.pageViews30d !== undefined) sig.push(`${s.pageViews30d} page views in last 30 days`);
+    if (s.activeAdmins !== undefined) sig.push(`${s.activeAdmins} active property admins`);
     if (s.lastActivity) sig.push(`last activity ${s.lastActivity}`);
-    if (s.pageViews30d !== undefined) sig.push(`${s.pageViews30d} page views (30d)`);
-    if (s.activeAdmins !== undefined) sig.push(`${s.activeAdmins} active admins`);
-    if (s.supportNextAction) sig.push(`support next action: ${s.supportNextAction}`);
+    if (s.lastBusinessReview) sig.push(`last business review ${s.lastBusinessReview}`);
+    if (s.nextRenewalDate) sig.push(`next renewal ${s.nextRenewalDate.slice(0, 10)}`);
+    if (s.supportNextAction) sig.push(`support next action ${s.supportNextAction}`);
     if (s.cancellationPending) sig.push('CANCELLATION PENDING');
     if (sig.length) d.push(`Engagement signals: ${sig.join('; ')}`);
   }
@@ -113,8 +119,8 @@ function buildPrompt(input: BriefNarrativeInput): string {
 Today is ${input.today}.
 
 Using ONLY the data below, write three sections for the CSM:
-- "whatsHappening": 2 to 3 sentences on the current state. Lead with the single most important fact (contract timing, score trend, usage drop, open high-priority cases). Use real numbers and dates, and translate dates into "in N days" / "N days ago" where useful.
-- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts.
+- "whatsHappening": 2 to 3 sentences on the current state. Lead with the single most important fact (contract timing, score trend, usage drop, open high-priority cases). Use real numbers and dates, and translate dates into "in N days" / "N days/months ago" where useful.
+- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts. Watch for quiet risk: low page views, zero active admins, or a business review long overdue can mean risk even when the at-risk flag is off.
 - "nextSteps": 2 to 4 specific actions the CSM should take before or on the call. Each must tie to a concrete fact above (a case number, a date, a contract term). No generic advice.
 
 Rules:
@@ -131,7 +137,7 @@ ${d.join('\n')}`;
 
 function parseNarrative(raw: string): BriefNarrative | null {
   if (!raw) return null;
-  let text = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  const text = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) return null;
@@ -150,9 +156,10 @@ function parseNarrative(raw: string): BriefNarrative | null {
 function fallbackNarrative(input: BriefNarrativeInput): BriefNarrative {
   const happening: string[] = [];
   if (input.health && input.health.value != null) {
-    happening.push(`ChurnZero score ${input.health.value}/100${input.health.grade ? ` (${input.health.grade})` : ''}${input.health.trend ? `, trend ${input.health.trend}` : ''}.`);
+    happening.push(`ChurnZero score ${input.health.value}/100${input.health.trend ? `, trend ${input.health.trend}` : ''} (higher = more risk).`);
   }
   if (input.contractEnd) happening.push(`Contract ends ${input.contractEnd}${input.autoRenew === false ? ' with auto-renew off' : ''}.`);
+  if (input.czSignals && input.czSignals.pageViews30d !== undefined) happening.push(`${input.czSignals.pageViews30d} page views in 30 days.`);
   if (input.cases.length) happening.push(`${input.cases.length} open case${input.cases.length > 1 ? 's' : ''}.`);
   if (input.opportunities.length) happening.push(`${input.opportunities.length} open opportunit${input.opportunities.length > 1 ? 'ies' : 'y'}.`);
 
@@ -160,6 +167,7 @@ function fallbackNarrative(input: BriefNarrativeInput): BriefNarrative {
   const p1 = input.cases.find(c => (c.priority || '').toLowerCase().includes('high') || (c.priority || '').includes('1'));
   if (p1) steps.push(`Check status of case #${p1.number} (${p1.subject ?? 'open case'}) before the call.`);
   if (input.autoRenew === false && input.contractEnd) steps.push(`Confirm renewal intent. Contract ends ${input.contractEnd} and auto-renew is off.`);
+  if (input.czSignals && input.czSignals.activeAdmins === 0) steps.push('Re-engage the account: zero active property admins on record.');
   if (input.opportunities.length) steps.push(`Review the ${input.opportunities.length} open opportunit${input.opportunities.length > 1 ? 'ies' : 'y'} and confirm next step.`);
   if (!steps.length) steps.push('Confirm the account goals and look for expansion or reference opportunities.');
 
@@ -167,7 +175,7 @@ function fallbackNarrative(input: BriefNarrativeInput): BriefNarrative {
     whatsHappening: happening.join(' ') || 'Limited data available for this account. (AI synthesis was unavailable.)',
     whatItMeans: input.atRisk
       ? 'Flagged at risk. Work the open items below before the conversation.'
-      : 'No major risk flags. Confirm goals and watch for expansion.',
+      : 'No risk flag set, but confirm the engagement signals below before assuming healthy.',
     nextSteps: steps,
   };
 }

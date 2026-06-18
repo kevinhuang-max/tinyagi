@@ -11,6 +11,7 @@ import type { BriefNarrative } from './synthesize';
 
 interface BriefData {
   account: SFAccount;
+  csmName?: string | null;
   childCount?: number;
   totalFamilyArr?: number;
   opportunities: SFOpportunity[];
@@ -19,7 +20,6 @@ interface BriefData {
   shoots: SFShoot[];
   licenses: SFLicense[];
   czHealthScore?: number | null;
-  czGrade?: string | null;
   czTrend?: string | null;
   narrative: BriefNarrative;
   contractTerms?: ContractTerms;
@@ -29,13 +29,11 @@ export function formatBrief(data: BriefData): object {
   const { account, narrative } = data;
   const blocks: object[] = [];
 
-  // Header
   blocks.push({
     type: 'header',
     text: { type: 'plain_text', text: truncate(account.Name, 150), emoji: false },
   });
 
-  // One-line topline: ARR + risk + family
   const arr = account.Active_ARR__c ? `$${account.Active_ARR__c.toLocaleString()} ARR` : 'ARR N/A';
   const risk = account.At_Risk__c ? ':red_circle: At Risk' : ':large_green_circle: Not flagged';
   let topline = `*${arr}*  ·  ${risk}`;
@@ -44,20 +42,15 @@ export function formatBrief(data: BriefData): object {
   }
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: topline } });
 
-  // Narrative: What's happening
   blocks.push({ type: 'divider' });
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*What's happening*\n${narrative.whatsHappening}` } });
-
-  // What it means
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*What it means*\n${narrative.whatItMeans}` } });
 
-  // Next steps
   if (narrative.nextSteps && narrative.nextSteps.length > 0) {
     const steps = narrative.nextSteps.map((s, i) => `${i + 1}. ${s}`).join('\n');
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*Next steps*\n${steps}` } });
   }
 
-  // One collapsed Details line
   blocks.push({ type: 'divider' });
   blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: buildDetails(data) }] });
 
@@ -68,14 +61,13 @@ function buildDetails(data: BriefData): string {
   const { account } = data;
   const parts: string[] = [];
 
-  parts.push(`CSM: ${account.Support_Rep__c || 'Unassigned'}`);
+  parts.push(`CSM: ${data.csmName || account.Support_Rep__c || 'Unassigned'}`);
   if (account.Account_Tier__c) parts.push(`Tier ${account.Account_Tier__c}`);
   if (account.Property_Status__c) parts.push(account.Property_Status__c);
 
   if (data.czHealthScore !== undefined && data.czHealthScore !== null) {
-    const grade = data.czGrade ? ` ${data.czGrade}` : '';
     const trend = data.czTrend ? `, ${data.czTrend}` : '';
-    parts.push(`CZ score ${data.czHealthScore}/100${grade}${trend} (higher = more risk)`);
+    parts.push(`CZ score ${data.czHealthScore}/100${trend} (higher = more risk)`);
   }
 
   const ct = data.contractTerms;

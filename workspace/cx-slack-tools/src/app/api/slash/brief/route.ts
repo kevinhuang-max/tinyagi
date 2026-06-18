@@ -4,17 +4,6 @@
  * Builds a CSM-facing pre-call brief: a narrative (What's happening / What it
  * means / Next steps) over the full Salesforce + ChurnZero picture, plus one
  * collapsed Details line.
- *
- * Flow:
- * 1. Acknowledge Slack immediately (must respond within 3s)
- * 2. Query Supabase (Salesforce) + ChurnZero for the account picture
- * 3. Run Claude Haiku to synthesize the narrative
- * 4. Post the formatted result to Slack via response_url
- *
- * Cold-start note: the heavy data/AI libs are loaded lazily INSIDE
- * processAndRespond via dynamic import(), so the initial Slack ack path keeps a
- * near-empty module graph and returns within Slack's 3s window even on a cold
- * lambda. A keep-warm cron (see vercel.json) hits the GET handler below.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -23,8 +12,7 @@ import { verifySlackRequest } from '@/lib/slack-verify';
 
 export const maxDuration = 30;
 
-// Keep-warm endpoint. Vercel Cron pings this (GET) on a schedule so the lambda
-// stays hot and the real Slack POST acks well inside the 3s deadline.
+// Keep-warm endpoint (Vercel Cron pings GET so the lambda stays hot).
 export async function GET() {
   return NextResponse.json({ ok: true, warm: true });
 }
@@ -49,8 +37,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Acknowledge immediately (Slack requires a response within 3 seconds), then
-  // do the heavy lifting async via waitUntil.
   waitUntil(
     processAndRespond(searchTerm, responseUrl).catch(err => {
       console.error('Brief processing error:', err);
@@ -68,7 +54,7 @@ export async function POST(req: NextRequest) {
 }
 
 async function processAndRespond(searchTerm: string, responseUrl: string) {
-  // Heavy libs loaded lazily so they don't inflate the cold-start ack path above.
+  // Heavy libs loaded lazily so they don't inflate the cold-start ack path.
   const {
     findAccount,
     getOpenOpportunities,
@@ -77,19 +63,13 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     getRecentShoots,
     getLicenses,
     getChildAccounts,
+    getUserName,
   } = await import('@/lib/supabase');
-  const {
-    getAccountByExternalId,
-    getScoreCalculation,
-    getScoreFactors,
-    getOpenTasks,
-    getRecentEvents,
-  } = await import('@/lib/churnzero');
+  const { getAccountByExternalId, getScoreTrend, getOpenTasks, getRecentEvents } = await import('@/lib/churnzero');
   const { synthesizeNarrative } = await import('@/lib/synthesize');
   const { formatBrief } = await import('@/lib/format');
   const { getContractTerms } = await import('@/lib/contract-terms');
 
-  // Step 1: Find account in Salesforce
   const accounts = await findAccount(searchTerm);
 
   if (accounts.length === 0) {
@@ -103,7 +83,6 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
   const account = accounts[0];
   const alternatives = accounts.length > 1 ? accounts.slice(1).map(a => a.Name).join(', ') : null;
 
-  // Step 2: Query all data sources in parallel
   const [
     opportunities,
     cases,
@@ -113,6 +92,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     children,
     czAccount,
     contractTerms,
+    csmName,
   ] = await Promise.all([
     getOpenOpportunities(account.Id),
     getRecentCases(account.Id),
@@ -122,43 +102,41 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     account.ParentId ? [] : getChildAccounts(account.Id),
     getAccountByExternalId(account.Id),
     getContractTerms(account.Id),
+    getUserName(account.Support_Rep__c),
   ]);
 
-  // Step 3: ChurnZero health + timeline (when the account exists in CZ)
+  // ChurnZero health + engagement (when the account exists in CZ)
   let czHealthScore: number | null = null;
-  let czGrade: string | null = null;
   let czTrend: string | null = null;
   let czTasks: Array<{ name?: string; dueDate?: string; status?: string }> = [];
   let czEvents: Array<{ date?: string; description?: string; type?: string }> = [];
   let czSignals: BriefSignals | null = null;
 
   if (czAccount) {
-    const [scoreCalc, scoreFactors, tasks, events] = await Promise.all([
-      getScoreCalculation(czAccount.Id),
-      getScoreFactors(czAccount.Id),
+    czHealthScore = czAccount.PrimaryChurnScoreValue ?? null;
+
+    const [trend, tasks, events] = await Promise.all([
+      getScoreTrend(czAccount.Id),
       getOpenTasks(czAccount.Id),
       getRecentEvents(account.Id),
     ]);
-    void scoreFactors;
-
-    if (scoreCalc) {
-      czHealthScore = scoreCalc.CurrentScore ?? null;
-      czGrade = scoreCalc.Grade ?? null;
-      czTrend = scoreCalc.ScoreTrend ?? null;
-    }
-
+    czTrend = trend;
     czTasks = tasks.map(t => ({ name: t.Name, dueDate: t.DueDate, status: t.StatusName }));
     czEvents = events.map(e => ({ date: e.EventDate, description: e.Description, type: e.EventTypeName }));
+
+    const cf = czAccount.Cf || {};
     czSignals = {
-      lastActivity: czAccount.Cf?.LastActivity as string | undefined,
-      pageViews30d: czAccount.Cf?.OfPageViewsLast30Days as number | undefined,
-      activeAdmins: czAccount.Cf?.ActivePropertyAdmins as number | undefined,
-      supportNextAction: czAccount.Cf?.SupportNextAction as string | undefined,
-      cancellationPending: czAccount.Cf?.CancellationPending as boolean | undefined,
+      usageFrequency: czAccount.UsageFrequency,
+      nextRenewalDate: czAccount.NextRenewalDate,
+      pageViews30d: cf.OfPageViewsLast30Days as number | undefined,
+      activeAdmins: cf.ActivePropertyAdmins as number | undefined,
+      lastActivity: cf.LastActivity as string | undefined,
+      lastBusinessReview: cf.MostRecentBusinessReview as string | undefined,
+      supportNextAction: cf.SupportNextAction as string | undefined,
+      cancellationPending: cf.CancellationPending as boolean | undefined,
     };
   }
 
-  // Step 4: Family ARR if this is a parent account
   let childCount: number | undefined;
   let totalFamilyArr: number | undefined;
   if (children.length > 0) {
@@ -166,7 +144,6 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     totalFamilyArr = children.reduce((sum, c) => sum + (c.Active_ARR__c || 0), 0) + (account.Active_ARR__c || 0);
   }
 
-  // Step 5: Synthesize the narrative over the full picture (always run)
   const today = new Date().toISOString().slice(0, 10);
   const narrative = await synthesizeNarrative({
     accountName: account.Name,
@@ -174,11 +151,11 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     tier: account.Account_Tier__c,
     status: account.Property_Status__c,
     atRisk: account.At_Risk__c,
-    csm: account.Support_Rep__c,
+    csm: csmName || account.Support_Rep__c,
     contractEnd: contractTerms?.contract_end || account.Subscription_End_Date__c,
     autoRenew: contractTerms?.auto_renewal ?? null,
     cancellationNoticeDays: contractTerms?.cancellation_notice_days ?? null,
-    health: { value: czHealthScore, grade: czGrade, trend: czTrend },
+    health: { value: czHealthScore, trend: czTrend },
     opportunities: opportunities.map(o => ({ name: o.Name, stage: o.StageName, amount: o.Amount, closeDate: o.CloseDate })),
     cases: cases.map(c => ({ number: c.CaseNumber, subject: c.Subject, status: c.Status, priority: c.Priority, createdDate: c.CreatedDate })),
     nps: nps.map(n => ({ score: n.Net_Promoter_Score__c, grouping: n.NPS_Grouping__c, comment: n.Comments__c, date: n.CreatedDate })),
@@ -189,9 +166,9 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     today,
   });
 
-  // Step 6: Format and send
   const message = formatBrief({
     account,
+    csmName,
     childCount,
     totalFamilyArr,
     opportunities,
@@ -200,7 +177,6 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     shoots,
     licenses,
     czHealthScore,
-    czGrade,
     czTrend,
     narrative,
     contractTerms: contractTerms ?? undefined,
@@ -219,9 +195,12 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
 }
 
 interface BriefSignals {
-  lastActivity?: string;
+  usageFrequency?: string;
+  nextRenewalDate?: string;
   pageViews30d?: number;
   activeAdmins?: number;
+  lastActivity?: string;
+  lastBusinessReview?: string;
   supportNextAction?: string;
   cancellationPending?: boolean;
 }

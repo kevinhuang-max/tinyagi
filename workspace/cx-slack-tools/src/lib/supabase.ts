@@ -198,3 +198,21 @@ export async function getChildAccounts(parentId: string): Promise<SFAccount[]> {
     limit: 50,
   });
 }
+
+// ─── User (CSM) Lookup ──────────────────────────────────────────────
+// Support_Rep__c is a User-lookup id (e.g. 0051...); resolve it to a name.
+
+export async function getUserName(userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  try {
+    const rows = await query<{ Name: string }>({
+      table: 'User',
+      select: 'Name',
+      filters: `Id=eq.${userId}`,
+      limit: 1,
+    });
+    return rows[0]?.Name ?? null;
+  } catch {
+    return null;
+  }
+}
