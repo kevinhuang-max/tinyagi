@@ -41,6 +41,7 @@ export interface BriefNarrativeInput {
   } | null;
   czTasks: Array<{ name?: string; dueDate?: string; status?: string }>;
   czEvents: Array<{ date?: string; description?: string; type?: string }>;
+  usage: { pageViews30d: number; pageViewsPrev30d: number; trendPct: number | null; sessions30d: number; lastView: string | null } | null;
   today: string;
 }
 
@@ -117,6 +118,14 @@ function buildPrompt(input: BriefNarrativeInput): string {
     if (s.cancellationPending) sig.push('CANCELLATION PENDING');
     if (sig.length) d.push(`Engagement signals: ${sig.join('; ')}`);
   }
+  if (input.usage) {
+    const u = input.usage;
+    const tr = u.trendPct != null ? ' (' + (u.trendPct >= 0 ? '+' : '') + u.trendPct + '% vs prior 30 days)' : '';
+    d.push('Real product usage (Tinybird, external viewers only): ' + u.pageViews30d + ' page views in last 30 days' + tr + '; ' + u.sessions30d + ' sessions' + (u.lastView ? '; last view ' + withRel(u.lastView, today) : '') + '.');
+  } else {
+    d.push('Real product usage: not available for this account (no confident match to an analytics property).');
+  }
+
   if (input.opportunities.length) {
     d.push('Open opportunities:');
     for (const o of input.opportunities) d.push(`  - ${o.name}: ${o.stage}${o.amount != null ? ` (ARR $${o.amount.toLocaleString()})` : ''}${o.closeDate ? `, close ${withRel(o.closeDate, today)}` : ''}`);
@@ -148,7 +157,7 @@ Today is ${today}.
 
 Using ONLY the data below, write three sections for the CSM:
 - "whatsHappening": 2 to 3 sentences on the current state. Lead with the single most important fact (contract timing, score trend, usage drop, open high-priority cases). Use real numbers and dates.
-- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts. Watch for quiet risk in the data provided (an overdue business review, a stalled or near-term renewal, open high-priority cases) even when the at-risk flag is off. Do NOT comment on platform usage, page views, or active admins - that data is not included here, so never claim the account is unused or abandoned.
+- "whatItMeans": 1 to 2 sentences interpreting the signals together. Is this account healthy, at risk, or an expansion opportunity, and why? Connect the dots rather than restating facts. Watch for quiet risk even when the at-risk flag is off: low or declining product usage (page views), an overdue business review, a stalled or near-term renewal, or open high-priority cases. Base any usage statements ONLY on the "Real product usage" line above; if it says usage is not available, do not speculate about usage.
 - "nextSteps": 2 to 4 specific actions the CSM should take before or on the call. Each must tie to a concrete fact above (a case number, a date, a contract term). No generic advice.
 
 Rules:

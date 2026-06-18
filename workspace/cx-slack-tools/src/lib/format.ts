@@ -8,6 +8,7 @@
 import type { SFAccount, SFOpportunity, SFCase, SFNps, SFShoot, SFLicense } from './supabase';
 import type { ContractTerms } from './contract-terms';
 import type { BriefNarrative } from './synthesize';
+import type { PropertyUsage } from './tinybird';
 
 interface BriefData {
   account: SFAccount;
@@ -22,6 +23,7 @@ interface BriefData {
   czHealthScore?: number | null;
   czTrend?: string | null;
   contractEnd?: string | null;
+  usage?: PropertyUsage | null;
   narrative: BriefNarrative;
   contractTerms?: ContractTerms;
 }
@@ -103,6 +105,10 @@ function buildDetails(data: BriefData): string {
     parts.push('Licenses: ' + Array.from(licTypes.entries()).map(([t, c]) => `${t} ${c}`).join(', '));
   }
 
+  if (data.usage) {
+    const t = data.usage.trendPct != null ? ' (' + (data.usage.trendPct >= 0 ? '+' : '') + data.usage.trendPct + '%)' : '';
+    parts.push(data.usage.pageViews30d + ' views/30d' + t);
+  }
   if (account.Region__c) parts.push(account.Region__c);
   if (account.Billing_Status__c) parts.push(`Billing ${account.Billing_Status__c}`);
   parts.push(`ID ${account.Id}`);

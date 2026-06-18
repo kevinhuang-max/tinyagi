@@ -67,6 +67,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     getCurrentContractEnd,
   } = await import('@/lib/supabase');
   const { getAccountByExternalId, getScoreTrend, getOpenTasks, getRecentEvents } = await import('@/lib/churnzero');
+  const { getPropertyUsage } = await import('@/lib/tinybird');
   const { synthesizeNarrative } = await import('@/lib/synthesize');
   const { formatBrief } = await import('@/lib/format');
   const { getContractTerms } = await import('@/lib/contract-terms');
@@ -95,6 +96,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     contractTerms,
     csmName,
     currentContractEnd,
+    usage,
   ] = await Promise.all([
     getOpenOpportunities(account.Id),
     getRecentCases(account.Id),
@@ -106,6 +108,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     getContractTerms(account.Id),
     getUserName(account.Support_Rep__c),
     getCurrentContractEnd(account.Id),
+    getPropertyUsage(account.Name),
   ]);
 
   // ChurnZero health + engagement (when the account exists in CZ)
@@ -170,6 +173,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     czSignals,
     czTasks,
     czEvents,
+    usage,
     today,
   });
 
@@ -186,6 +190,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     czHealthScore,
     czTrend,
     narrative,
+    usage,
     contractEnd,
     contractTerms: contractTerms ?? undefined,
   });
