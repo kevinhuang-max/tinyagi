@@ -64,6 +64,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     getLicenses,
     getChildAccounts,
     getUserName,
+    getCurrentContractEnd,
   } = await import('@/lib/supabase');
   const { getAccountByExternalId, getScoreTrend, getOpenTasks, getRecentEvents } = await import('@/lib/churnzero');
   const { synthesizeNarrative } = await import('@/lib/synthesize');
@@ -93,6 +94,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     czAccount,
     contractTerms,
     csmName,
+    currentContractEnd,
   ] = await Promise.all([
     getOpenOpportunities(account.Id),
     getRecentCases(account.Id),
@@ -103,6 +105,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     getAccountByExternalId(account.Id),
     getContractTerms(account.Id),
     getUserName(account.Support_Rep__c),
+    getCurrentContractEnd(account.Id),
   ]);
 
   // ChurnZero health + engagement (when the account exists in CZ)
@@ -144,6 +147,10 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     totalFamilyArr = children.reduce((sum, c) => sum + (c.Active_ARR__c || 0), 0) + (account.Active_ARR__c || 0);
   }
 
+  // Authoritative contract end: latest signed renewal first, then extracted
+  // terms, then the (often stale) Account field.
+  const contractEnd = currentContractEnd || contractTerms?.contract_end || account.Subscription_End_Date__c;
+
   const today = new Date().toISOString().slice(0, 10);
   const narrative = await synthesizeNarrative({
     accountName: account.Name,
@@ -152,7 +159,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     status: account.Property_Status__c,
     atRisk: account.At_Risk__c,
     csm: csmName || account.Support_Rep__c,
-    contractEnd: contractTerms?.contract_end || account.Subscription_End_Date__c,
+    contractEnd,
     autoRenew: contractTerms?.auto_renewal ?? null,
     cancellationNoticeDays: contractTerms?.cancellation_notice_days ?? null,
     health: { value: czHealthScore, trend: czTrend },
@@ -179,6 +186,7 @@ async function processAndRespond(searchTerm: string, responseUrl: string) {
     czHealthScore,
     czTrend,
     narrative,
+    contractEnd,
     contractTerms: contractTerms ?? undefined,
   });
 

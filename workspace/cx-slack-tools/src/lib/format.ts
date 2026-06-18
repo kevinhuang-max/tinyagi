@@ -21,6 +21,7 @@ interface BriefData {
   licenses: SFLicense[];
   czHealthScore?: number | null;
   czTrend?: string | null;
+  contractEnd?: string | null;
   narrative: BriefNarrative;
   contractTerms?: ContractTerms;
 }
@@ -71,7 +72,7 @@ function buildDetails(data: BriefData): string {
   }
 
   const ct = data.contractTerms;
-  const contractEnd = ct?.contract_end || account.Subscription_End_Date__c;
+  const contractEnd = data.contractEnd || ct?.contract_end || account.Subscription_End_Date__c;
   if (contractEnd) {
     let c = `Contract ends ${contractEnd}`;
     if (ct && ct.auto_renewal !== null && ct.auto_renewal !== undefined) {

@@ -142,10 +142,29 @@ export async function getOpenOpportunities(accountId: string): Promise<SFOpportu
   return query<SFOpportunity>({
     table: 'Opportunity',
     select: 'Name,StageName,Amount,ARR__c,CloseDate,Type,Contract_End_Date__c',
-    filters: `AccountId=eq.${accountId}&StageName=neq.Closed Won&StageName=neq.Closed Lost`,
+    filters: `AccountId=eq.${accountId}&StageName=not.ilike.*Closed*`,
     order: 'CloseDate.asc.nullslast',
     limit: 5,
   });
+}
+
+export async function getCurrentContractEnd(accountId: string): Promise<string | null> {
+  // Account.Subscription_End_Date__c goes stale: renewals are tracked as
+  // Opportunities, not by updating that field (the Contract object is empty
+  // for many accounts). Use the latest signed (Closed Won) renewal's
+  // Contract_End_Date__c as the real current contract end.
+  try {
+    const rows = await query<{ Contract_End_Date__c: string | null }>({
+      table: 'Opportunity',
+      select: 'Contract_End_Date__c',
+      filters: 'AccountId=eq.' + accountId + '&StageName=ilike.*Closed Won*&Contract_End_Date__c=not.is.null',
+      order: 'Contract_End_Date__c.desc.nullslast',
+      limit: 1,
+    });
+    return rows[0]?.Contract_End_Date__c ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getRecentCases(accountId: string): Promise<SFCase[]> {
